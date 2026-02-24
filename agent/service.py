@@ -64,7 +64,9 @@ class AgentCreator:
         """
         Plan and scaffold a new agent project.
 
-        This creates a folder blueprint and copies selected providers/tools/skills/MCP/UI modules.
+        This forks a child workspace by copying only the parent environment folders
+        (LLMProviders, MCP, SKILLS, TOOLS, UI, .aidzero), then writes generated
+        child files (main.py and agent/* runtime/context files).
         """
         result = self.describe_requirements(user_request=user_request)
         scaffold = self.create_agent_project_from_plan(
@@ -84,7 +86,7 @@ class AgentCreator:
         catalog: ComponentCatalog,
         overwrite: bool = False,
     ) -> ScaffoldResult:
-        """Generate main.py via LLM, then scaffold project folders and copy selected modules."""
+        """Generate main.py and scaffold the destination child-agent fork."""
         destination = self.resolve_destination_from_plan(plan)
         main_py_source = self.entrypoint_writer.generate_main_py(
             user_request=user_request,
@@ -94,6 +96,7 @@ class AgentCreator:
             destination=destination,
             plan=plan,
             catalog=catalog,
+            user_request=user_request,
             main_py_source=main_py_source,
             overwrite=overwrite,
         )

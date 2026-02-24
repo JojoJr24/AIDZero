@@ -11,7 +11,7 @@ import urllib.request
 from collections.abc import Iterable, Iterator
 from typing import Any
 
-from agent_creator.provider_base import ProviderError
+from agent.provider_base import ProviderError
 
 DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 DATA_URL_RE = re.compile(r"^data:(?P<mime>[^;]+);base64,(?P<data>.+)$", re.IGNORECASE)

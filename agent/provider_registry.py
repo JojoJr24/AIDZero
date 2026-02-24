@@ -29,7 +29,37 @@ class ProviderRegistry:
                 entrypoint=self.repo_root / "LLMProviders" / "AID-google_gemini" / "provider.py",
                 class_name="GeminiProvider",
                 default_model="gemini-2.5-flash",
-            )
+            ),
+            "AID-openai": ProviderSpec(
+                name="AID-openai",
+                entrypoint=self.repo_root / "LLMProviders" / "AID-openai" / "provider.py",
+                class_name="OpenAIProvider",
+                default_model="gpt-4o-mini",
+            ),
+            "AID-claude": ProviderSpec(
+                name="AID-claude",
+                entrypoint=self.repo_root / "LLMProviders" / "AID-claude" / "provider.py",
+                class_name="ClaudeProvider",
+                default_model="claude-3-5-sonnet-latest",
+            ),
+            "AID-ollama": ProviderSpec(
+                name="AID-ollama",
+                entrypoint=self.repo_root / "LLMProviders" / "AID-ollama" / "provider.py",
+                class_name="OllamaProvider",
+                default_model="llama3.1",
+            ),
+            "AID-lmstudio": ProviderSpec(
+                name="AID-lmstudio",
+                entrypoint=self.repo_root / "LLMProviders" / "AID-lmstudio" / "provider.py",
+                class_name="LMStudioProvider",
+                default_model="local-model",
+            ),
+            "AID-llamacpp": ProviderSpec(
+                name="AID-llamacpp",
+                entrypoint=self.repo_root / "LLMProviders" / "AID-llamacpp" / "provider.py",
+                class_name="LlamaCppProvider",
+                default_model="local-model",
+            ),
         }
 
     def names(self) -> list[str]:
