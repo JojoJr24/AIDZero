@@ -6,11 +6,18 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from pathlib import Path
 import sys
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from typing import Any
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from agent.ui_display import to_ui_model_label
 
 
 @dataclass
@@ -147,7 +154,7 @@ def run_chat(config: ChatConfig) -> int:
 
     print("Terminal Chat UI")
     print(f"Endpoint: {config.base_url}/chat/completions")
-    print(f"Model: {config.model}")
+    print(f"Model: {to_ui_model_label(config.model)}")
     print("Type /help for commands.")
 
     while True:

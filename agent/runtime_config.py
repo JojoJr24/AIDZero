@@ -9,6 +9,7 @@ from typing import Callable
 
 from .models import ComponentCatalog
 from .provider_registry import ProviderRegistry
+from .ui_display import to_ui_label, to_ui_model_label
 
 CONFIG_DIR = ".aidzero"
 LEGACY_CONFIG_DIR = ".autoagent"
@@ -130,6 +131,7 @@ def _run_first_time_setup(
             options=model_names,
             input_fn=input_fn,
             output_fn=output_fn,
+            display_fn=to_ui_model_label,
         )
     else:
         default_model = provider_registry.default_model(selected_provider)
@@ -138,9 +140,9 @@ def _run_first_time_setup(
 
     output_fn(
         "Selected configuration:\n"
-        f"- ui: {selected_ui}\n"
-        f"- provider: {selected_provider}\n"
-        f"- model: {selected_model}"
+        f"- ui: {to_ui_label(selected_ui)}\n"
+        f"- provider: {to_ui_label(selected_provider)}\n"
+        f"- model: {to_ui_model_label(selected_model)}"
     )
     confirm = input_fn("Save this configuration? [Y/n]: ").strip().lower()
     if confirm in {"n", "no"}:
@@ -160,10 +162,11 @@ def _select_option(
     options: list[str],
     input_fn: Callable[[str], str],
     output_fn: Callable[[str], None],
+    display_fn: Callable[[str], str] = to_ui_label,
 ) -> str:
     output_fn(f"Available {label} options:")
     for index, option in enumerate(options, start=1):
-        output_fn(f"  {index}. {option}")
+        output_fn(f"  {index}. {display_fn(option)}")
     while True:
         raw = input_fn(f"Select {label} [1-{len(options)}]: ").strip()
         if not raw:

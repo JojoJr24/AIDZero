@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Script: run-tool-gateway.sh
 # Objective: launch the MCP tool-search gateway via npm start.
+# Notes: gateway MCP server config lives at .aidzero/mcporter.json.
 # Usage: bash run-tool-gateway.sh
 # Inputs: none. Outputs: gateway process running on stdio.
 

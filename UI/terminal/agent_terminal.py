@@ -12,8 +12,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from agent_creator.provider_registry import ProviderRegistry
-from agent_creator.service import AgentCreator
+from agent.provider_registry import ProviderRegistry
+from agent.service import AgentCreator
+from agent.ui_display import to_ui_label
 
 
 def parse_args() -> argparse.Namespace:
@@ -50,7 +51,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def run_terminal_agent_creator(
+def run_terminal_agent(
     *,
     provider_name: str,
     model: str,
@@ -75,7 +76,7 @@ def run_terminal_agent_creator(
     try:
         provider = provider_registry.create(selected_provider_name)
     except Exception as error:  # noqa: BLE001
-        print(f"error> could not initialize provider '{selected_provider_name}': {error}")
+        print(f"error> could not initialize provider '{to_ui_label(selected_provider_name)}': {error}")
         return 2
 
     creator = AgentCreator(provider=provider, model=selected_model_name, repo_root=root)
@@ -115,6 +116,8 @@ def run_terminal_agent_creator(
     print(f"Copied items: {len(scaffold_result.copied_items)}")
     if scaffold_result.entrypoint_file:
         print(f"Entrypoint: {scaffold_result.entrypoint_file}")
+    if scaffold_result.runtime_config_file:
+        print(f"Runtime config: {scaffold_result.runtime_config_file}")
     if scaffold_result.metadata_file:
         print(f"Plan file: {scaffold_result.metadata_file}")
     return 0
@@ -122,7 +125,7 @@ def run_terminal_agent_creator(
 
 def main() -> int:
     args = parse_args()
-    return run_terminal_agent_creator(
+    return run_terminal_agent(
         provider_name=args.provider,
         model=args.model,
         user_request=args.request,

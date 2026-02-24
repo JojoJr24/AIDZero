@@ -2,6 +2,10 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { normalizeObjectSchema } from "@modelcontextprotocol/sdk/server/zod-compat.js";
 import { toJsonSchemaCompat } from "@modelcontextprotocol/sdk/server/zod-json-schema-compat.js";
+import { constants as fsConstants } from "node:fs";
+import { access, copyFile, mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import * as z from "zod/v4";
 import { createRuntime } from "mcporter";
 import { ToolIndex } from "./tool-index.js";
@@ -10,6 +14,16 @@ import { SchemaValidator } from "./schema-validator.js";
 const GATEWAY_NAME = "tool-search-gateway";
 const GATEWAY_VERSION = "0.1.0";
 const SHUTDOWN_SIGNALS = ["SIGINT", "SIGTERM"];
+const DEFAULT_MCPORTER_CONFIG = { mcpServers: {} };
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const GATEWAY_ROOT = path.resolve(__dirname, "..");
+const REPO_ROOT = path.resolve(GATEWAY_ROOT, "..", "..");
+const MCP_CONFIG_FILENAME = "mcporter.json";
+const MCP_CONFIG_DIR = path.join(REPO_ROOT, ".aidzero");
+const MCP_CONFIG_PATH = path.join(MCP_CONFIG_DIR, MCP_CONFIG_FILENAME);
+const LEGACY_MCP_CONFIG_PATH = path.join(GATEWAY_ROOT, "config", MCP_CONFIG_FILENAME);
 
 const toolSearchSchema = {
   query: z.string().min(1).describe("Text describing what the tool should do."),
@@ -52,7 +66,9 @@ const toolDescribeSchema = {
 const toolHealthSchema = {};
 
 async function main() {
+  const configPath = await ensureMcporterConfigPath();
   const runtime = await createRuntime({
+    configPath,
     clientInfo: {
       name: `${GATEWAY_NAME}:runtime`,
       version: GATEWAY_VERSION,
@@ -366,6 +382,34 @@ function normalizeError(error) {
     return JSON.stringify(error);
   } catch {
     return String(error);
+  }
+}
+
+async function ensureMcporterConfigPath() {
+  await mkdir(MCP_CONFIG_DIR, { recursive: true });
+
+  if (await pathExists(MCP_CONFIG_PATH)) {
+    return MCP_CONFIG_PATH;
+  }
+
+  if (await pathExists(LEGACY_MCP_CONFIG_PATH)) {
+    await copyFile(LEGACY_MCP_CONFIG_PATH, MCP_CONFIG_PATH);
+    console.log(`[${GATEWAY_NAME}] migrated MCP config to ${MCP_CONFIG_PATH}`);
+    return MCP_CONFIG_PATH;
+  }
+
+  const serialized = `${JSON.stringify(DEFAULT_MCPORTER_CONFIG, null, 2)}\n`;
+  await writeFile(MCP_CONFIG_PATH, serialized, "utf-8");
+  console.log(`[${GATEWAY_NAME}] created empty MCP config at ${MCP_CONFIG_PATH}`);
+  return MCP_CONFIG_PATH;
+}
+
+async function pathExists(targetPath) {
+  try {
+    await access(targetPath, fsConstants.F_OK);
+    return true;
+  } catch {
+    return false;
   }
 }
 

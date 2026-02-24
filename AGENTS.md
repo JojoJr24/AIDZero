@@ -6,8 +6,9 @@
 - `TOOLS/` stores reusable tool wrappers and tool contracts.
 - `SKILLS/` stores reusable agent skills. Each skill folder should include `SKILL.md`, optional `references/`, and optional `scripts/`.
 - `MCP/AID-tool-gateway/` contains the JavaScript MCP gateway.
-- `MCP/AID-tool-gateway/src/` holds runtime code; `MCP/AID-tool-gateway/config/` stores config; `MCP/AID-tool-gateway/scripts/` stores operational checks.
-- `agent_creator/` contains the core orchestration agent that scans components, asks the LLM for requirements, and scaffolds new agent projects.
+- `MCP/AID-tool-gateway/src/` holds runtime code and `MCP/AID-tool-gateway/scripts/` stores operational checks.
+- `.aidzero/mcporter.json` stores MCP server configuration consumed by the gateway runtime.
+- `agent/` contains the core orchestration agent that scans components, asks the LLM for requirements, and scaffolds new agent projects.
 - Add new Python core modules under `src/aidzero/` and tests under `tests/`.
 
 ## Build, Test, and Development Commands
@@ -42,3 +43,23 @@ Use `uv` for all Python dependency/runtime commands and keep script paths repo-r
 - Keep commits focused and atomic.
 - PRs should include scope, rationale, test evidence (commands + key output), related issue/task, and config/environment impact.
 - Include logs when changing operator-facing behavior (CLI output, tool routing, gateway responses, or provider selection flow).
+
+## UI Naming Normalization (Mandatory)
+- This rule applies to every UI surface (terminal, web, future UI modules) when displaying providers, tools, skills, MCP, UI names, or similar identifiers.
+- If a displayed value starts with `AID-`, remove that prefix in the UI label.
+- If a displayed value does not start with `AID-`, append ` (test)` to the UI label.
+- Exception: model names must be displayed exactly as-is (no prefix removal and no ` (test)` suffix).
+- Keep internal IDs unchanged for runtime logic, API calls, storage, and CLI arguments. Normalize only display labels.
+- Reuse `agent.ui_display.to_ui_label()` and `agent.ui_display.to_ui_model_label()` instead of duplicating custom formatting logic.
+- Examples:
+  - `AID-claude` -> `claude`
+  - `AID-google_gemini` -> `google_gemini`
+  - `terminal` -> `terminal (test)`
+  - `gpt-4o-mini` -> `gpt-4o-mini`
+
+## UI Runtime Isolation (Mandatory)
+- `AIDZero.py` must not import specific UI implementations directly.
+- Runnable UIs are discovered dynamically from `UI/<ui_name>/entrypoint.py`.
+- Every runnable UI must expose a function `run_ui(...)` in its `entrypoint.py`.
+- UI-specific runtime settings must be handled inside each UI module, using shared CLI transport via repeated `--ui-option KEY=VALUE`.
+- Keep UI module internals isolated: each UI decides how to parse and apply `ui_options` and must not require root-level UI-specific flags.

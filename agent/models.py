@@ -89,4 +89,5 @@ class ScaffoldResult:
     created_directories: list[Path] = field(default_factory=list)
     copied_items: list[Path] = field(default_factory=list)
     entrypoint_file: Path | None = None
+    runtime_config_file: Path | None = None
     metadata_file: Path | None = None

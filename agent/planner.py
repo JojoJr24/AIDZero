@@ -1,4 +1,4 @@
-"""Planning logic that asks an LLM which components a new agent needs."""
+"""Planning logic for generated-agent project metadata."""
 
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ class AgentPlanner:
         payload = catalog.as_prompt_payload()
         return (
             "You are AIDZero's planning engine. "
-            "Analyze the user request and decide which repository components are required.\n\n"
+            "Analyze the user request and prepare metadata for a generated agent clone.\n\n"
             "Return ONLY valid JSON. Do not include markdown, explanation, or extra text.\n"
             "JSON schema:\n"
             "{\n"
@@ -58,7 +58,10 @@ class AgentPlanner:
             "}\n\n"
             "Rules:\n"
             "- project_folder must be a relative path and should usually start with generated_agents/.\n"
-            "- Select only component names that exist in the catalog.\n\n"
+            "- Select only component names that exist in the catalog.\n"
+            "- required_llm_providers is mandatory and must include exactly one provider name from the catalog.\n"
+            "- The generated project copies only these parent folders: LLMProviders, MCP, SKILLS, TOOLS, UI, .aidzero.\n"
+            "- required_* fields are still required as metadata for runtime defaults and traceability.\n\n"
             f"User request:\n{user_request.strip()}\n\n"
             f"Available catalog:\n{json.dumps(payload, indent=2)}\n"
         )
@@ -69,6 +72,11 @@ class AgentPlanner:
 
         required_llm_providers = _filter_known(
             parsed.get("required_llm_providers", []), names["llm_providers"], "required_llm_providers", warnings
+        )
+        required_llm_providers = _normalize_required_provider_selection(
+            required_llm_providers,
+            names["llm_providers"],
+            warnings,
         )
         required_skills = _filter_known(
             parsed.get("required_skills", []), names["skills"], "required_skills", warnings
@@ -169,6 +177,37 @@ def _normalize_project_folder(value: Any) -> str | None:
     if not parts or any(part == ".." for part in parts):
         return None
     return "/".join(parts)
+
+
+def _normalize_required_provider_selection(
+    selected_providers: list[str],
+    known_provider_names: set[str],
+    warnings: list[str],
+) -> list[str]:
+    if selected_providers:
+        if len(selected_providers) > 1:
+            warnings.append(
+                "Planner selected multiple providers; using only the first one for generated agent runtime."
+            )
+        return [selected_providers[0]]
+
+    if not known_provider_names:
+        warnings.append("No LLM providers available in catalog; generated runtime config will be empty.")
+        return []
+
+    preferred_order = ["AID-openai", "AID-google_gemini", "AID-claude"]
+    for candidate in preferred_order:
+        if candidate in known_provider_names:
+            warnings.append(
+                f"Planner response missing required_llm_providers; defaulted to '{candidate}'."
+            )
+            return [candidate]
+
+    fallback = sorted(known_provider_names)[0]
+    warnings.append(
+        f"Planner response missing required_llm_providers; defaulted to '{fallback}'."
+    )
+    return [fallback]
 
 
 def _slugify(value: str) -> str:
