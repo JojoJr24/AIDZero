@@ -1,0 +1,41 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Runtime config
+.aidzero/
+.autoagent/
+
+# Generated projects
+generated_agents/
+Generated_agents/
+
+# Keep only AID-* subfolders inside these roots
+LLMProviders/*
+!LLMProviders/AID-*/
+!LLMProviders/AID-*/**
+
+SKILLS/*
+!SKILLS/AID-*/
+!SKILLS/AID-*/**
+
+MCP/*
+!MCP/AID-*/
+!MCP/AID-*/**
+
+TOOLS/*
+!TOOLS/AID-*/
+!TOOLS/AID-*/**
+
+# Dependency folders and caches
+node_modules/
+**/node_modules/
+**/__pycache__/
+**/*.py[oc]
