@@ -14,6 +14,7 @@ AIDZero is the root agent in a recursive agent-building system. It analyzes a us
 - The generated agent receives a workspace-safe `main.py` entrypoint with prompt-driven file actions constrained to its own folder.
 - The generated `agent/child_manifest.json` stores the user request and mission context used for the new agent.
 - The generated agent receives `agent_config.json` for runtime provider/model selection.
+- Each generated project includes `generation_process.log` at its root with timestamped generation steps.
 - The generated `main.py` is expected to support production execution patterns (including cron-style runs and output suitable for chat forwarding).
 
 ## Repository Layout
@@ -82,10 +83,10 @@ uv run AIDZero.py --request "Build an agent for daily KPI reports" --yes
 The MCP gateway reads server definitions from:
 
 ```text
-.aidzero/mcporter.json
+MCP/mcporter.json
 ```
 
-If a legacy file exists at `MCP/AID-tool-gateway/config/mcporter.json`, the gateway migrates it automatically on startup.
+If a legacy file exists at `.aidzero/mcporter.json` or `MCP/AID-tool-gateway/config/mcporter.json`, the gateway migrates it automatically on startup.
 
 Add or edit servers under the `mcpServers` object. Example:
 
@@ -112,11 +113,11 @@ Add or edit servers under the `mcpServers` object. Example:
 Then run:
 
 ```bash
-bash run-tool-gateway.sh
+bash MCP/run-tool-gateway.sh
 cd MCP/AID-tool-gateway && node scripts/smoke.mjs
 ```
 
-For command-based servers, paths are resolved relative to `.aidzero/` because the config file lives there.
+For command-based servers, paths are resolved relative to `MCP/` because the config file lives there.
 
 ## Design Principles
 

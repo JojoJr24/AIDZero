@@ -19,6 +19,8 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from agent.provider_registry import ProviderRegistry
+from agent.prompt_history import PromptHistoryStore
+from agent.models import AgentPlan
 from agent.service import AgentCreator
 from agent.ui_display import to_ui_label, to_ui_model_label
 
@@ -88,6 +90,7 @@ def _build_options_payload(
     default_request: str,
     dry_run: bool,
     overwrite: bool,
+    prompt_history: list[str],
 ) -> dict[str, Any]:
     provider_names = provider_registry.names()
     selected_provider = default_provider if provider_registry.has(default_provider) else provider_names[0]
@@ -101,7 +104,69 @@ def _build_options_payload(
         "default_request": default_request,
         "dry_run": dry_run,
         "overwrite": overwrite,
+        "prompt_history": prompt_history,
         "model_error": model_error,
+    }
+
+
+def _normalize_string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    normalized: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        stripped = item.strip()
+        if stripped:
+            normalized.append(stripped)
+    return normalized
+
+
+def _plan_from_payload(payload: Any) -> AgentPlan:
+    if not isinstance(payload, dict):
+        raise ValueError("Field 'plan' must be an object.")
+
+    agent_name = _coerce_str(payload.get("agent_name"))
+    project_folder = _coerce_str(payload.get("project_folder"))
+    goal = _coerce_str(payload.get("goal"))
+    summary = _coerce_str(payload.get("summary"))
+    if not agent_name:
+        raise ValueError("Plan field 'agent_name' is required.")
+    if not project_folder:
+        raise ValueError("Plan field 'project_folder' is required.")
+    if not goal:
+        raise ValueError("Plan field 'goal' is required.")
+    if not summary:
+        raise ValueError("Plan field 'summary' is required.")
+
+    return AgentPlan(
+        agent_name=agent_name,
+        project_folder=project_folder,
+        goal=goal,
+        summary=summary,
+        required_llm_providers=_normalize_string_list(payload.get("required_llm_providers")),
+        required_skills=_normalize_string_list(payload.get("required_skills")),
+        required_tools=_normalize_string_list(payload.get("required_tools")),
+        required_mcp=_normalize_string_list(payload.get("required_mcp")),
+        required_ui=_normalize_string_list(payload.get("required_ui")),
+        folder_blueprint=_normalize_string_list(payload.get("folder_blueprint")),
+        implementation_steps=_normalize_string_list(payload.get("implementation_steps")),
+        warnings=_normalize_string_list(payload.get("warnings")),
+        raw_response=_coerce_str(payload.get("raw_response")),
+    )
+
+
+def _build_scaffold_payload(scaffold_result: Any) -> dict[str, Any]:
+    return {
+        "destination": str(scaffold_result.destination),
+        "created_directories": [str(path) for path in scaffold_result.created_directories],
+        "copied_items": [str(path) for path in scaffold_result.copied_items],
+        "entrypoint_file": str(scaffold_result.entrypoint_file) if scaffold_result.entrypoint_file else None,
+        "runtime_config_file": (
+            str(scaffold_result.runtime_config_file) if scaffold_result.runtime_config_file else None
+        ),
+        "metadata_file": str(scaffold_result.metadata_file) if scaffold_result.metadata_file else None,
+        "process_log_file": str(scaffold_result.process_log_file) if scaffold_result.process_log_file else None,
     }
 
 
@@ -115,10 +180,12 @@ def _run_agent_request(
     overwrite: bool,
 ) -> dict[str, Any]:
     registry = ProviderRegistry(repo_root)
+    prompt_history = PromptHistoryStore(repo_root)
     if not registry.has(provider_name):
         raise ValueError(f"Unknown provider '{provider_name}'.")
 
     resolved_model = model.strip() or registry.default_model(provider_name)
+    prompt_history_items = prompt_history.add_prompt(user_request)
     provider = registry.create(provider_name)
     creator = AgentCreator(provider=provider, model=resolved_model, repo_root=repo_root)
     planning_result = creator.describe_requirements(user_request=user_request)
@@ -127,7 +194,9 @@ def _run_agent_request(
         "mode": "dry_run" if dry_run else "scaffold",
         "provider": provider_name,
         "model": resolved_model,
+        "request": user_request,
         "plan": planning_result.plan.to_dict(),
+        "prompt_history": prompt_history_items,
     }
     if dry_run:
         return payload
@@ -138,17 +207,45 @@ def _run_agent_request(
         catalog=planning_result.catalog,
         overwrite=overwrite,
     )
-    payload["scaffold"] = {
-        "destination": str(scaffold_result.destination),
-        "created_directories": [str(path) for path in scaffold_result.created_directories],
-        "copied_items": [str(path) for path in scaffold_result.copied_items],
-        "entrypoint_file": str(scaffold_result.entrypoint_file) if scaffold_result.entrypoint_file else None,
-        "runtime_config_file": (
-            str(scaffold_result.runtime_config_file) if scaffold_result.runtime_config_file else None
-        ),
-        "metadata_file": str(scaffold_result.metadata_file) if scaffold_result.metadata_file else None,
-    }
+    payload["scaffold"] = _build_scaffold_payload(scaffold_result)
     return payload
+
+
+def _run_scaffold_from_dry_run(
+    *,
+    repo_root: Path,
+    provider_name: str,
+    model: str,
+    user_request: str,
+    plan_payload: Any,
+    overwrite: bool,
+) -> dict[str, Any]:
+    registry = ProviderRegistry(repo_root)
+    prompt_history = PromptHistoryStore(repo_root)
+    if not registry.has(provider_name):
+        raise ValueError(f"Unknown provider '{provider_name}'.")
+
+    resolved_model = model.strip() or registry.default_model(provider_name)
+    prompt_history_items = prompt_history.add_prompt(user_request)
+    plan = _plan_from_payload(plan_payload)
+
+    provider = registry.create(provider_name)
+    creator = AgentCreator(provider=provider, model=resolved_model, repo_root=repo_root)
+    scaffold_result = creator.create_agent_project_from_plan(
+        user_request=user_request,
+        plan=plan,
+        catalog=creator.scan_components(),
+        overwrite=overwrite,
+    )
+    return {
+        "mode": "scaffold_from_dry_run",
+        "provider": provider_name,
+        "model": resolved_model,
+        "request": user_request,
+        "plan": plan.to_dict(),
+        "prompt_history": prompt_history_items,
+        "scaffold": _build_scaffold_payload(scaffold_result),
+    }
 
 
 def _render_index_html() -> str:
@@ -321,11 +418,17 @@ def _render_index_html() -> str:
           <label for="request">Request</label>
           <textarea id="request" placeholder="Build an agent for daily KPI reports..."></textarea>
         </div>
+        <div class="field full">
+          <label for="historyPrompt">Prompt History</label>
+          <select id="historyPrompt"></select>
+        </div>
       </div>
       <div class="actions">
         <label class="toggle"><input id="dryRun" type="checkbox" /> Dry run (plan only)</label>
         <label class="toggle"><input id="overwrite" type="checkbox" /> Overwrite non-empty destination</label>
         <button id="runBtn">Run</button>
+        <button id="useHistoryBtn" class="secondary" type="button">Use History Prompt</button>
+        <button id="runFromDryRunBtn" class="secondary" type="button" disabled>Scaffold Last Dry-Run</button>
         <button id="refreshBtn" class="secondary" type="button">Refresh Models</button>
       </div>
       <p id="status">Loading options...</p>
@@ -342,12 +445,16 @@ def _render_index_html() -> str:
     const providerEl = document.getElementById("provider");
     const modelEl = document.getElementById("model");
     const requestEl = document.getElementById("request");
+    const historyPromptEl = document.getElementById("historyPrompt");
     const dryRunEl = document.getElementById("dryRun");
     const overwriteEl = document.getElementById("overwrite");
     const runBtn = document.getElementById("runBtn");
+    const useHistoryBtn = document.getElementById("useHistoryBtn");
+    const runFromDryRunBtn = document.getElementById("runFromDryRunBtn");
     const refreshBtn = document.getElementById("refreshBtn");
     const statusEl = document.getElementById("status");
     const resultEl = document.getElementById("result");
+    let lastDryRunContext = null;
 
     function setStatus(message, cls = "") {
       statusEl.className = cls;
@@ -372,6 +479,30 @@ def _render_index_html() -> str:
       if (!selectEl.value && items.length > 0) {
         const first = items[0];
         selectEl.value = typeof first === "string" ? first : first.id;
+      }
+    }
+
+    function refillPromptHistory(items) {
+      historyPromptEl.innerHTML = "";
+      if (!Array.isArray(items) || items.length === 0) {
+        const option = document.createElement("option");
+        option.value = "";
+        option.textContent = "No prompt history yet";
+        historyPromptEl.appendChild(option);
+        historyPromptEl.disabled = true;
+        useHistoryBtn.disabled = true;
+        return;
+      }
+
+      historyPromptEl.disabled = false;
+      useHistoryBtn.disabled = false;
+      for (let index = 0; index < items.length; index += 1) {
+        const prompt = String(items[index]);
+        const option = document.createElement("option");
+        option.value = prompt;
+        option.textContent = `${index + 1}. ${prompt}`;
+        if (index === 0) option.selected = true;
+        historyPromptEl.appendChild(option);
       }
     }
 
@@ -425,9 +556,21 @@ def _render_index_html() -> str:
           throw new Error(payload.error || "Request failed.");
         }
         setResult(payload);
+        if (Array.isArray(payload.prompt_history)) {
+          refillPromptHistory(payload.prompt_history);
+        }
         if (payload.mode === "dry_run") {
+          lastDryRunContext = {
+            provider: payload.provider,
+            model: payload.model,
+            request: payload.request || request,
+            plan: payload.plan
+          };
+          runFromDryRunBtn.disabled = false;
           setStatus("Plan generated successfully.", "ok");
         } else {
+          lastDryRunContext = null;
+          runFromDryRunBtn.disabled = true;
           setStatus("Project scaffolded successfully.", "ok");
         }
       } catch (error) {
@@ -437,14 +580,63 @@ def _render_index_html() -> str:
       }
     }
 
+    function applySelectedHistoryPrompt() {
+      if (historyPromptEl.disabled) return;
+      const selectedPrompt = historyPromptEl.value.trim();
+      if (!selectedPrompt) return;
+      requestEl.value = selectedPrompt;
+      setStatus("Prompt loaded from history.", "ok");
+    }
+
+    async function scaffoldFromLastDryRun() {
+      if (!lastDryRunContext) {
+        setStatus("No dry-run available to scaffold.", "warn");
+        return;
+      }
+
+      runBtn.disabled = true;
+      runFromDryRunBtn.disabled = true;
+      setStatus("Scaffolding from last dry-run...", "warn");
+      try {
+        const response = await fetch("/api/scaffold-from-dry-run", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            provider: lastDryRunContext.provider,
+            model: lastDryRunContext.model,
+            request: lastDryRunContext.request,
+            plan: lastDryRunContext.plan,
+            overwrite: overwriteEl.checked
+          })
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.error || "Scaffold from dry-run failed.");
+        }
+        setResult(payload);
+        if (Array.isArray(payload.prompt_history)) {
+          refillPromptHistory(payload.prompt_history);
+        }
+        lastDryRunContext = null;
+        setStatus("Project scaffolded from dry-run successfully.", "ok");
+      } catch (error) {
+        setStatus(String(error), "error");
+      } finally {
+        runBtn.disabled = false;
+        runFromDryRunBtn.disabled = lastDryRunContext === null;
+      }
+    }
+
     async function boot() {
       try {
         const options = await fetchOptions();
         refillSelect(providerEl, options.providers, options.selected_provider);
         refillSelect(modelEl, options.models, options.selected_model);
+        refillPromptHistory(options.prompt_history || []);
         requestEl.value = options.default_request || "";
         dryRunEl.checked = Boolean(options.dry_run);
         overwriteEl.checked = Boolean(options.overwrite);
+        runFromDryRunBtn.disabled = true;
         setResult({ info: "Ready." });
         if (options.model_error) {
           setStatus(`Ready (model list fallback): ${options.model_error}`, "warn");
@@ -459,6 +651,8 @@ def _render_index_html() -> str:
     providerEl.addEventListener("change", () => { void refreshModels(); });
     refreshBtn.addEventListener("click", () => { void refreshModels(); });
     runBtn.addEventListener("click", () => { void submitRun(); });
+    useHistoryBtn.addEventListener("click", () => { applySelectedHistoryPrompt(); });
+    runFromDryRunBtn.addEventListener("click", () => { void scaffoldFromLastDryRun(); });
     void boot();
   </script>
 </body>
@@ -541,6 +735,9 @@ def _handler_factory(runtime: WebRuntime) -> type[BaseHTTPRequestHandler]:
             if parsed.path == "/api/run":
                 self._handle_run()
                 return
+            if parsed.path == "/api/scaffold-from-dry-run":
+                self._handle_scaffold_from_dry_run()
+                return
             _json_response(
                 self,
                 {"error": f"Unknown path '{escape(parsed.path)}'."},
@@ -552,6 +749,7 @@ def _handler_factory(runtime: WebRuntime) -> type[BaseHTTPRequestHandler]:
 
         def _handle_options(self) -> None:
             registry = ProviderRegistry(runtime.repo_root)
+            prompt_history = PromptHistoryStore(runtime.repo_root)
             payload = _build_options_payload(
                 provider_registry=registry,
                 default_provider=runtime.defaults.provider_name,
@@ -559,6 +757,7 @@ def _handler_factory(runtime: WebRuntime) -> type[BaseHTTPRequestHandler]:
                 default_request=runtime.defaults.request,
                 dry_run=runtime.defaults.dry_run,
                 overwrite=runtime.defaults.overwrite,
+                prompt_history=prompt_history.list_prompts(),
             )
             _json_response(self, payload)
 
@@ -611,6 +810,34 @@ def _handler_factory(runtime: WebRuntime) -> type[BaseHTTPRequestHandler]:
                     model=model_name,
                     user_request=user_request,
                     dry_run=dry_run,
+                    overwrite=overwrite,
+                )
+            except ValueError as error:
+                _json_response(self, {"error": str(error)}, status=HTTPStatus.BAD_REQUEST)
+                return
+            except Exception as error:  # noqa: BLE001
+                _json_response(self, {"error": str(error)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+                return
+
+            _json_response(self, result)
+
+        def _handle_scaffold_from_dry_run(self) -> None:
+            try:
+                payload = _read_json_body(self)
+                user_request = _coerce_str(payload.get("request"))
+                provider_name = _coerce_str(payload.get("provider"), default=runtime.defaults.provider_name)
+                model_name = _coerce_str(payload.get("model"), default=runtime.defaults.model)
+                overwrite = _coerce_bool(payload.get("overwrite"), default=runtime.defaults.overwrite)
+                plan_payload = payload.get("plan")
+                if not user_request:
+                    raise ValueError("Field 'request' is required.")
+
+                result = _run_scaffold_from_dry_run(
+                    repo_root=runtime.repo_root,
+                    provider_name=provider_name,
+                    model=model_name,
+                    user_request=user_request,
+                    plan_payload=plan_payload,
                     overwrite=overwrite,
                 )
             except ValueError as error:

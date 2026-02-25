@@ -13,6 +13,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from agent.provider_registry import ProviderRegistry
+from agent.prompt_history import PromptHistoryStore
 from agent.service import AgentCreator
 from agent.ui_display import to_ui_label
 
@@ -65,13 +66,15 @@ def run_terminal_agent(
     selected_provider_name = provider_name.strip()
     selected_model_name = model.strip()
     root = (repo_root or Path.cwd()).resolve()
+    prompt_history = PromptHistoryStore(root)
 
     request = (user_request or "").strip()
     if not request:
-        request = input("Describe the agent you want to create:\n> ").strip()
+        request = _select_request_from_history(prompt_history)
     if not request:
         print("error> empty request.")
         return 2
+    prompt_history.add_prompt(request)
 
     try:
         provider = provider_registry.create(selected_provider_name)
@@ -120,7 +123,28 @@ def run_terminal_agent(
         print(f"Runtime config: {scaffold_result.runtime_config_file}")
     if scaffold_result.metadata_file:
         print(f"Plan file: {scaffold_result.metadata_file}")
+    if scaffold_result.process_log_file:
+        print(f"Process log: {scaffold_result.process_log_file}")
     return 0
+
+
+def _select_request_from_history(prompt_history: PromptHistoryStore) -> str:
+    history_items = prompt_history.list_prompts(limit=10)
+    if history_items:
+        print("\n=== Prompt History ===")
+        for index, item in enumerate(history_items, start=1):
+            print(f"{index}. {item}")
+        selection = input(
+            "Select a prompt number from history or press Enter to write a new one:\n> "
+        ).strip()
+        if selection:
+            if selection.isdigit():
+                selected_index = int(selection)
+                if 1 <= selected_index <= len(history_items):
+                    return history_items[selected_index - 1]
+            print("warning> invalid history selection; using manual input.")
+
+    return input("Describe the agent you want to create:\n> ").strip()
 
 
 def main() -> int:

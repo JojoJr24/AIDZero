@@ -12,14 +12,14 @@ MCP stdio gateway that exposes:
 Gateway MCP server definitions are loaded from:
 
 ```text
-<repo-root>/.aidzero/mcporter.json
+<repo-root>/MCP/mcporter.json
 ```
 
-On startup, if legacy config exists at `MCP/AID-tool-gateway/config/mcporter.json`, it is copied to `.aidzero/mcporter.json`.
+On startup, if legacy config exists at `.aidzero/mcporter.json` or `MCP/AID-tool-gateway/config/mcporter.json`, it is copied to `MCP/mcporter.json`.
 
 ## Add MCP Servers
 
-1. Open `.aidzero/mcporter.json`.
+1. Open `MCP/mcporter.json`.
 2. Add a new entry under `mcpServers`.
 3. Restart the gateway.
 
@@ -40,7 +40,7 @@ Example:
     },
     "chrome-devtools": {
       "command": [
-        "../MCP/AID-tool-gateway/scripts/run-chrome-devtools.sh",
+        "./AID-tool-gateway/scripts/run-chrome-devtools.sh",
         "--headless=false",
         "--browserUrl=http://127.0.0.1:9222"
       ]
@@ -52,7 +52,7 @@ Example:
 }
 ```
 
-For command-based servers, relative paths are resolved from `.aidzero/` (the folder that contains `mcporter.json`).
+For command-based servers, relative paths are resolved from `MCP/` (the folder that contains `mcporter.json`).
 
 ## Commands
 

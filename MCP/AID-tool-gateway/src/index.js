@@ -21,9 +21,12 @@ const __dirname = path.dirname(__filename);
 const GATEWAY_ROOT = path.resolve(__dirname, "..");
 const REPO_ROOT = path.resolve(GATEWAY_ROOT, "..", "..");
 const MCP_CONFIG_FILENAME = "mcporter.json";
-const MCP_CONFIG_DIR = path.join(REPO_ROOT, ".aidzero");
+const MCP_CONFIG_DIR = path.join(REPO_ROOT, "MCP");
 const MCP_CONFIG_PATH = path.join(MCP_CONFIG_DIR, MCP_CONFIG_FILENAME);
-const LEGACY_MCP_CONFIG_PATH = path.join(GATEWAY_ROOT, "config", MCP_CONFIG_FILENAME);
+const LEGACY_MCP_CONFIG_PATHS = [
+  path.join(REPO_ROOT, ".aidzero", MCP_CONFIG_FILENAME),
+  path.join(GATEWAY_ROOT, "config", MCP_CONFIG_FILENAME),
+];
 
 const toolSearchSchema = {
   query: z.string().min(1).describe("Text describing what the tool should do."),
@@ -392,10 +395,12 @@ async function ensureMcporterConfigPath() {
     return MCP_CONFIG_PATH;
   }
 
-  if (await pathExists(LEGACY_MCP_CONFIG_PATH)) {
-    await copyFile(LEGACY_MCP_CONFIG_PATH, MCP_CONFIG_PATH);
-    console.log(`[${GATEWAY_NAME}] migrated MCP config to ${MCP_CONFIG_PATH}`);
-    return MCP_CONFIG_PATH;
+  for (const legacyPath of LEGACY_MCP_CONFIG_PATHS) {
+    if (await pathExists(legacyPath)) {
+      await copyFile(legacyPath, MCP_CONFIG_PATH);
+      console.log(`[${GATEWAY_NAME}] migrated MCP config from ${legacyPath} to ${MCP_CONFIG_PATH}`);
+      return MCP_CONFIG_PATH;
+    }
   }
 
   const serialized = `${JSON.stringify(DEFAULT_MCPORTER_CONFIG, null, 2)}\n`;

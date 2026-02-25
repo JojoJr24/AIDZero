@@ -50,8 +50,8 @@ def test_scaffold_clones_repo_and_rebuilds_agent_runtime_package(tmp_path: Path)
     (source_root / "LICENSE").write_text("private root file\n", encoding="utf-8")
     (source_root / "generated_agents" / "old").mkdir(parents=True)
     (source_root / "generated_agents" / "old" / "artifact.txt").write_text("old\n", encoding="utf-8")
-    (source_root / ".aidzero").mkdir(parents=True)
-    (source_root / ".aidzero" / "mcporter.json").write_text('{"mcpServers":{}}\n', encoding="utf-8")
+    (source_root / "MCP").mkdir(parents=True)
+    (source_root / "MCP" / "mcporter.json").write_text('{"mcpServers":{}}\n', encoding="utf-8")
 
     provider_dir = source_root / "LLMProviders" / "AID-openai"
     provider_dir.mkdir(parents=True)
@@ -93,7 +93,7 @@ def test_scaffold_clones_repo_and_rebuilds_agent_runtime_package(tmp_path: Path)
     assert config_payload["provider"] == "AID-openai"
 
     assert (destination / "LLMProviders").exists()
-    assert (destination / ".aidzero" / "mcporter.json").exists()
+    assert (destination / "MCP" / "mcporter.json").exists()
     assert not (destination / "AIDZero.py").exists()
     assert not (destination / "README.md").exists()
     assert not (destination / "LICENSE").exists()

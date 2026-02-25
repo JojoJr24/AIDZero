@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "..", "..", "..");
-const gatewayLauncher = path.join(repoRoot, "run-tool-gateway.sh");
+const gatewayLauncher = path.join(repoRoot, "MCP", "run-tool-gateway.sh");
 
 async function main() {
   const transport = new StdioClientTransport({
