@@ -23,6 +23,7 @@ class RuntimeConfig:
     ui: str
     provider: str
     model: str
+    generation_process_log_enabled: bool = True
 
 
 class RuntimeConfigStore:
@@ -55,10 +56,14 @@ class RuntimeConfigStore:
                 payload = json.load(handle)
         except (json.JSONDecodeError, OSError):
             return None
+        generation_process_log_enabled = _coerce_bool(
+            payload.get("generation_process_log_enabled"), default=True
+        )
         return RuntimeConfig(
             ui=str(payload.get("ui", "")).strip(),
             provider=str(payload.get("provider", "")).strip(),
             model=str(payload.get("model", "")).strip(),
+            generation_process_log_enabled=generation_process_log_enabled,
         )
 
 
@@ -153,7 +158,12 @@ def _run_first_time_setup(
             output_fn=output_fn,
         )
 
-    return RuntimeConfig(ui=selected_ui, provider=selected_provider, model=selected_model)
+    return RuntimeConfig(
+        ui=selected_ui,
+        provider=selected_provider,
+        model=selected_model,
+        generation_process_log_enabled=True,
+    )
 
 
 def _select_option(
@@ -194,3 +204,17 @@ def _is_valid(
     if provider_names and config.provider not in provider_names:
         return False
     return True
+
+
+def _coerce_bool(value: object, *, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "y", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "n", "off"}:
+            return False
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return default

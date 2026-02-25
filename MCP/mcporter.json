@@ -1,0 +1,29 @@
+{
+  "mcpServers": {
+    "deep-research": {
+      "description": "Deep Search runtime used via gateway",
+      "command": [
+        "uv",
+        "--directory",
+        "/home/guillermo/mcpServers/mcpDeepResearch/src/",
+        "run",
+        "__init__.py",
+        "stdio"
+      ],
+      "env": {
+        "SEARXNG_URL": "http://192.168.1.81:8888",
+        "SEARXNG_SEARCH_PATH": "/search",
+        "SEARXNG_TIMEOUT": "15.0"
+      }
+    },
+    "chrome-devtools": {
+      "type": "local",
+      "enabled": true,
+      "command": [
+        "./AID-tool-gateway/scripts/run-chrome-devtools.sh",
+        "--headless=false",
+        "--browserUrl=http://127.0.0.1:9222"
+      ]
+    }
+  }
+}

@@ -147,11 +147,15 @@ def main() -> int:
         return 2
 
     if args.ui or args.provider or args.model:
+        existing_config = config_store.load()
         config_store.save(
             RuntimeConfig(
                 ui=selected_ui,
                 provider=selected_provider,
                 model=selected_model,
+                generation_process_log_enabled=(
+                    existing_config.generation_process_log_enabled if existing_config else True
+                ),
             )
         )
 
@@ -159,7 +163,9 @@ def main() -> int:
         "Active runtime configuration:\n"
         f"- ui: {to_ui_label(selected_ui)}\n"
         f"- provider: {to_ui_label(selected_provider)}\n"
-        f"- model: {to_ui_model_label(selected_model)}"
+        f"- model: {to_ui_model_label(selected_model)}\n"
+        f"- generation process log: "
+        f"{'enabled' if runtime_config.generation_process_log_enabled else 'disabled'}"
     )
     try:
         ui_options = _parse_ui_options(args.ui_option)

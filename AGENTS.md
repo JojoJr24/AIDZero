@@ -7,8 +7,9 @@
 - `SKILLS/` stores reusable agent skills. Each skill folder should include `SKILL.md`, optional `references/`, and optional `scripts/`.
 - `MCP/AID-tool-gateway/` contains the JavaScript MCP gateway.
 - `MCP/AID-tool-gateway/src/` holds runtime code and `MCP/AID-tool-gateway/scripts/` stores operational checks.
-- `.aidzero/mcporter.json` stores MCP server configuration consumed by the gateway runtime.
+- `MCP/mcporter.json` stores MCP server configuration consumed by the gateway runtime.
 - `agent/` contains the core orchestration agent that scans components, asks the LLM for requirements, and scaffolds new agent projects.
+- `UI/AGENTS.md` defines baseline UX/runtime requirements for every UI implementation.
 - Add new Python core modules under `src/aidzero/` and tests under `tests/`.
 
 ## Build, Test, and Development Commands
@@ -63,3 +64,7 @@ Use `uv` for all Python dependency/runtime commands and keep script paths repo-r
 - Every runnable UI must expose a function `run_ui(...)` in its `entrypoint.py`.
 - UI-specific runtime settings must be handled inside each UI module, using shared CLI transport via repeated `--ui-option KEY=VALUE`.
 - Keep UI module internals isolated: each UI decides how to parse and apply `ui_options` and must not require root-level UI-specific flags.
+
+## UI Prompt History (Mandatory)
+- Terminal and Web UIs must persist prompt history between runs.
+- Terminal and Web UIs must provide a built-in way to select prompts from that history.

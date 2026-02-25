@@ -9,7 +9,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from UI.web.agent_web import _build_options_payload, _coerce_bool, _model_candidates
+from UI.web.agent_web import _build_options_payload, _coerce_bool, _model_candidates, _plan_from_payload
 
 
 class _RegistryStub:
@@ -64,6 +64,7 @@ def test_build_options_payload_fallbacks_to_first_provider() -> None:
         default_request="plan a testing agent",
         dry_run=True,
         overwrite=False,
+        prompt_history=["first prompt", "second prompt"],
     )
 
     assert payload["selected_provider"] == "AID-alpha"
@@ -80,6 +81,7 @@ def test_build_options_payload_fallbacks_to_first_provider() -> None:
     assert payload["default_request"] == "plan a testing agent"
     assert payload["dry_run"] is True
     assert payload["overwrite"] is False
+    assert payload["prompt_history"] == ["first prompt", "second prompt"]
 
 
 def test_build_options_payload_uses_default_model_when_listing_fails() -> None:
@@ -91,8 +93,42 @@ def test_build_options_payload_uses_default_model_when_listing_fails() -> None:
         default_request="",
         dry_run=False,
         overwrite=True,
+        prompt_history=[],
     )
 
     assert payload["models"] == [{"id": "beta-default", "label": "beta-default"}]
     assert payload["selected_model"] == "beta-default"
     assert payload["model_error"] == "listing not available"
+
+
+def test_plan_from_payload_builds_agent_plan() -> None:
+    plan = _plan_from_payload(
+        {
+            "agent_name": "demo",
+            "project_folder": "generated_agents/demo",
+            "goal": "goal",
+            "summary": "summary",
+            "required_llm_providers": ["AID-alpha"],
+            "required_skills": ["AID-skill"],
+            "required_tools": ["AID-tool"],
+            "required_mcp": ["AID-mcp"],
+            "required_ui": ["terminal"],
+            "folder_blueprint": ["src", "tests"],
+            "implementation_steps": ["step one"],
+            "warnings": ["warn"],
+            "raw_response": "raw",
+        }
+    )
+    assert plan.agent_name == "demo"
+    assert plan.project_folder == "generated_agents/demo"
+    assert plan.required_llm_providers == ["AID-alpha"]
+    assert plan.required_ui == ["terminal"]
+
+
+def test_plan_from_payload_requires_required_fields() -> None:
+    try:
+        _plan_from_payload({})
+    except ValueError as error:
+        assert "agent_name" in str(error)
+    else:
+        raise AssertionError("Expected ValueError for missing required plan fields")

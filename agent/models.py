@@ -91,3 +91,4 @@ class ScaffoldResult:
     entrypoint_file: Path | None = None
     runtime_config_file: Path | None = None
     metadata_file: Path | None = None
+    process_log_file: Path | None = None

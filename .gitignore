@@ -29,6 +29,8 @@ SKILLS/*
 MCP/*
 !MCP/AID-*/
 !MCP/AID-*/**
+!MCP/mcporter.json
+!MCP/run-tool-gateway.sh
 
 TOOLS/*
 !TOOLS/AID-*/
