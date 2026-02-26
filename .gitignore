@@ -21,6 +21,9 @@ Generated_agents/
 LLMProviders/*
 !LLMProviders/AID-*/
 !LLMProviders/AID-*/**
+!LLMProviders/base.py
+!LLMProviders/provider_base.py
+!LLMProviders/openai_compatible_provider.py
 
 SKILLS/*
 !SKILLS/AID-*/

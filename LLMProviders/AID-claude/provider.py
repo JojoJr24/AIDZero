@@ -4,13 +4,18 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Iterable, Iterator
 from typing import Any
 
-from agent.provider_base import ProviderError
+from LLMProviders.provider_base import (
+    ProviderError,
+    normalize_tool_result_content,
+    parse_json_object,
+)
 
 DEFAULT_BASE_URL = "https://api.anthropic.com/v1"
 DEFAULT_ANTHROPIC_VERSION = "2023-06-01"
@@ -49,6 +54,9 @@ class ClaudeProvider:
         self.base_url = resolved_base_url.rstrip("/")
         self.anthropic_version = resolved_version
         self.timeout = timeout
+        self._stream_lock = threading.Lock()
+        self._active_stream_response: Any | None = None
+        self._stop_requested = False
 
     def list_models(self, *, page_size: int = 100) -> list[dict[str, Any]]:
         payload = self._request_json("GET", "/models", query={"limit": page_size})
@@ -72,8 +80,6 @@ class ClaudeProvider:
         *,
         system_instruction: Any = None,
         generation_config: dict[str, Any] | None = None,
-        tools: list[dict[str, Any]] | None = None,
-        tool_choice: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
         system_text, messages = _normalize_messages(contents, system_instruction=system_instruction)
@@ -82,8 +88,6 @@ class ClaudeProvider:
             messages=messages,
             system_text=system_text,
             generation_config=generation_config,
-            tools=tools,
-            tool_choice=tool_choice,
             extra=kwargs,
         )
         return self._request_json("POST", "/messages", payload=payload)
@@ -95,8 +99,6 @@ class ClaudeProvider:
         *,
         system_instruction: Any = None,
         generation_config: dict[str, Any] | None = None,
-        tools: list[dict[str, Any]] | None = None,
-        tool_choice: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> Iterator[dict[str, Any]]:
         system_text, messages = _normalize_messages(contents, system_instruction=system_instruction)
@@ -105,8 +107,6 @@ class ClaudeProvider:
             messages=messages,
             system_text=system_text,
             generation_config=generation_config,
-            tools=tools,
-            tool_choice=tool_choice,
             extra={**kwargs, "stream": True},
         )
         return self._stream_json_events("POST", "/messages", payload=payload)
@@ -155,8 +155,6 @@ class ClaudeProvider:
         *,
         generation_config: dict[str, Any] | None = None,
         system_instruction: Any = None,
-        tools: list[dict[str, Any]] | None = None,
-        tool_choice: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
         system_text, normalized_messages = _normalize_messages(
@@ -168,8 +166,6 @@ class ClaudeProvider:
             messages=normalized_messages,
             system_text=system_text,
             generation_config=generation_config,
-            tools=tools,
-            tool_choice=tool_choice,
             extra=kwargs,
         )
         return self._request_json("POST", "/messages", payload=payload)
@@ -181,8 +177,6 @@ class ClaudeProvider:
         *,
         generation_config: dict[str, Any] | None = None,
         system_instruction: Any = None,
-        tools: list[dict[str, Any]] | None = None,
-        tool_choice: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> Iterator[dict[str, Any]]:
         system_text, normalized_messages = _normalize_messages(
@@ -194,15 +188,22 @@ class ClaudeProvider:
             messages=normalized_messages,
             system_text=system_text,
             generation_config=generation_config,
-            tools=tools,
-            tool_choice=tool_choice,
             extra={**kwargs, "stream": True},
         )
         return self._stream_json_events("POST", "/messages", payload=payload)
 
+    def stop_stream(self) -> None:
+        with self._stream_lock:
+            self._stop_requested = True
+            response = self._active_stream_response
+        if response is None:
+            return
+        close = getattr(response, "close", None)
+        if callable(close):
+            close()
+
     def count_tokens(self, model: str, contents: Any, **kwargs: Any) -> dict[str, Any]:
         system_instruction = kwargs.pop("system_instruction", None)
-        tools = kwargs.pop("tools", None)
         system_text, messages = _normalize_messages(contents, system_instruction=system_instruction)
         payload: dict[str, Any] = {
             "model": _normalize_model_name(model),
@@ -210,8 +211,6 @@ class ClaudeProvider:
         }
         if system_text:
             payload["system"] = system_text
-        if isinstance(tools, list):
-            payload["tools"] = tools
         for key, value in kwargs.items():
             if value is not None:
                 payload[key] = value
@@ -220,6 +219,56 @@ class ClaudeProvider:
     def embed_content(self, model: str, content: Any, **kwargs: Any) -> dict[str, Any]:
         del model, content, kwargs
         raise ClaudeProviderError("Anthropic does not expose embeddings in the Messages API.")
+
+    def supports_tool_calling(self) -> bool:
+        return True
+
+    def extract_tool_calls(self, response: dict[str, Any]) -> list[dict[str, Any]]:
+        tool_calls: list[dict[str, Any]] = []
+        content = response.get("content")
+        if not isinstance(content, list):
+            return tool_calls
+
+        for index, block in enumerate(content, start=1):
+            if not isinstance(block, dict) or block.get("type") != "tool_use":
+                continue
+            name = block.get("name")
+            if not isinstance(name, str) or not name.strip():
+                continue
+            call_id = block.get("id")
+            if not isinstance(call_id, str) or not call_id.strip():
+                call_id = f"tool_call_{index}"
+            tool_calls.append(
+                {
+                    "id": call_id,
+                    "type": "function",
+                    "function": {
+                        "name": name.strip(),
+                        "arguments": json.dumps(parse_json_object(block.get("input")), ensure_ascii=False),
+                    },
+                }
+            )
+        return tool_calls
+
+    def build_tool_result_message(
+        self,
+        *,
+        tool_call_id: str,
+        name: str,
+        result: Any,
+    ) -> dict[str, Any]:
+        normalized_id = tool_call_id.strip()
+        if not normalized_id:
+            raise ValueError("tool_call_id cannot be empty.")
+        normalized_name = name.strip()
+        if not normalized_name:
+            raise ValueError("name cannot be empty.")
+        return {
+            "role": "tool",
+            "tool_call_id": normalized_id,
+            "name": normalized_name,
+            "content": normalize_tool_result_content(result),
+        }
 
     def _request_json(
         self,
@@ -269,21 +318,36 @@ class ClaudeProvider:
         )
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                for raw_payload in _iter_sse_payloads(response):
-                    if raw_payload == "[DONE]":
-                        break
-                    try:
-                        parsed = json.loads(raw_payload)
-                    except json.JSONDecodeError as error:
-                        raise ClaudeProviderError(
-                            f"Anthropic stream returned invalid JSON: {raw_payload[:300]}"
-                        ) from error
-                    if isinstance(parsed, dict):
-                        yield parsed
+                self._register_active_stream(response)
+                try:
+                    for raw_payload in _iter_sse_payloads(response):
+                        if self._is_stop_requested():
+                            break
+                        if raw_payload == "[DONE]":
+                            break
+                        try:
+                            parsed = json.loads(raw_payload)
+                        except json.JSONDecodeError as error:
+                            raise ClaudeProviderError(
+                                f"Anthropic stream returned invalid JSON: {raw_payload[:300]}"
+                            ) from error
+                        if isinstance(parsed, dict):
+                            yield parsed
+                finally:
+                    self._clear_active_stream(response)
         except urllib.error.HTTPError as error:
+            if self._consume_stop_requested():
+                return
             raise ClaudeProviderError(self._format_http_error(error)) from error
         except urllib.error.URLError as error:
+            if self._consume_stop_requested():
+                return
             raise ClaudeProviderError(f"Anthropic stream connection error: {error.reason}") from error
+        except Exception:
+            if self._consume_stop_requested():
+                return
+            raise
+        self._consume_stop_requested()
 
     def _build_url(self, path: str, *, query: dict[str, Any] | None = None) -> str:
         normalized_path = path if path.startswith("/") else f"/{path}"
@@ -313,6 +377,26 @@ class ClaudeProvider:
             return f"Anthropic HTTP {error.code}: {body}"
         return f"Anthropic HTTP {error.code}: {error.reason}"
 
+    def _register_active_stream(self, response: Any) -> None:
+        with self._stream_lock:
+            self._active_stream_response = response
+            self._stop_requested = False
+
+    def _clear_active_stream(self, response: Any) -> None:
+        with self._stream_lock:
+            if self._active_stream_response is response:
+                self._active_stream_response = None
+
+    def _is_stop_requested(self) -> bool:
+        with self._stream_lock:
+            return self._stop_requested
+
+    def _consume_stop_requested(self) -> bool:
+        with self._stream_lock:
+            requested = self._stop_requested
+            self._stop_requested = False
+            return requested
+
 
 def extract_text_from_response(payload: dict[str, Any]) -> str:
     content_blocks = payload.get("content")
@@ -341,8 +425,6 @@ def _build_messages_payload(
     messages: list[dict[str, Any]],
     system_text: str | None,
     generation_config: dict[str, Any] | None,
-    tools: list[dict[str, Any]] | None,
-    tool_choice: dict[str, Any] | None,
     extra: dict[str, Any] | None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
@@ -357,11 +439,6 @@ def _build_messages_payload(
         for key in ("max_tokens", "temperature", "top_k", "top_p", "stop_sequences", "metadata"):
             if key in generation_config and generation_config[key] is not None:
                 payload[key] = generation_config[key]
-
-    if tools is not None:
-        payload["tools"] = tools
-    if tool_choice is not None:
-        payload["tool_choice"] = tool_choice
 
     if extra:
         for key, value in extra.items():
@@ -384,22 +461,11 @@ def _normalize_messages(
         if text:
             normalized_messages.append({"role": "user", "content": text})
     elif isinstance(contents, dict):
-        candidate = _normalize_message(contents)
-        if candidate is not None:
-            normalized_messages.append(candidate)
+        normalized_messages.append(contents)
     elif isinstance(contents, Iterable):
         for item in contents:
-            if not isinstance(item, dict):
-                continue
-            candidate = _normalize_message(item)
-            if candidate is None:
-                continue
-            if candidate["role"] == "system":
-                candidate_text = _to_text(candidate.get("content"))
-                if candidate_text:
-                    system_text = _merge_text(system_text, candidate_text)
-                continue
-            normalized_messages.append(candidate)
+            if isinstance(item, dict):
+                normalized_messages.append(item)
     else:
         text = _to_text(contents)
         if text:
@@ -410,49 +476,148 @@ def _normalize_messages(
 
     cleaned_messages: list[dict[str, Any]] = []
     for message in normalized_messages:
-        role = str(message.get("role", "user")).strip().lower()
-        if role not in {"user", "assistant"}:
-            role = "user"
-        content = _normalize_content(message.get("content"))
+        role = str(message.get("role", "user")).strip().lower() or "user"
+        if role == "system":
+            candidate_text = _to_text(message.get("content"))
+            if candidate_text:
+                system_text = _merge_text(system_text, candidate_text)
+            continue
+
+        if role == "assistant":
+            content = _normalize_assistant_content(message)
+            if content is None:
+                continue
+            cleaned_messages.append({"role": "assistant", "content": content})
+            continue
+
+        if role == "tool":
+            content = _normalize_tool_result_message_content(message)
+            if content is None:
+                continue
+            cleaned_messages.append({"role": "user", "content": content})
+            continue
+
+        content = _normalize_user_content(message.get("content"))
         if content is None:
             continue
-        cleaned_messages.append({"role": role, "content": content})
+        cleaned_messages.append({"role": "user", "content": content})
 
     if not cleaned_messages:
         raise ClaudeProviderError("Messages cannot be empty after normalization.")
     return system_text, cleaned_messages
 
 
-def _normalize_message(value: dict[str, Any]) -> dict[str, Any] | None:
-    role = str(value.get("role", "user")).strip().lower()
-    if not role:
-        role = "user"
-    content = value.get("content")
-    return {"role": role, "content": content}
-
-
-def _normalize_content(content: Any) -> str | list[dict[str, str]] | None:
-    if isinstance(content, str):
-        text = content.strip()
-        return text if text else None
-
+def _normalize_user_content(content: Any) -> str | list[dict[str, Any]] | None:
     if isinstance(content, list):
-        normalized_blocks: list[dict[str, str]] = []
+        blocks: list[dict[str, Any]] = []
         for block in content:
             if not isinstance(block, dict):
                 continue
             block_type = block.get("type")
+            if block_type == "tool_result":
+                tool_use_id = block.get("tool_use_id")
+                if not isinstance(tool_use_id, str) or not tool_use_id.strip():
+                    continue
+                block_content = block.get("content")
+                if isinstance(block_content, str):
+                    payload_content: Any = block_content
+                else:
+                    payload_content = normalize_tool_result_content(block_content)
+                blocks.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": tool_use_id.strip(),
+                        "content": payload_content,
+                    }
+                )
+                continue
             if block_type != "text":
                 continue
             text = block.get("text")
             if isinstance(text, str) and text.strip():
-                normalized_blocks.append({"type": "text", "text": text})
-        if normalized_blocks:
-            return normalized_blocks
+                blocks.append({"type": "text", "text": text})
+        if blocks:
+            return blocks
         return None
 
     text = _to_text(content)
     return text if text else None
+
+
+def _normalize_assistant_content(message: dict[str, Any]) -> str | list[dict[str, Any]] | None:
+    content = message.get("content")
+    blocks: list[dict[str, Any]] = []
+
+    if isinstance(content, list):
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "tool_use":
+                name = block.get("name")
+                if not isinstance(name, str) or not name.strip():
+                    continue
+                tool_id = block.get("id")
+                if not isinstance(tool_id, str) or not tool_id.strip():
+                    continue
+                blocks.append(
+                    {
+                        "type": "tool_use",
+                        "id": tool_id.strip(),
+                        "name": name.strip(),
+                        "input": parse_json_object(block.get("input")),
+                    }
+                )
+                continue
+            if block.get("type") != "text":
+                continue
+            text = block.get("text")
+            if isinstance(text, str) and text.strip():
+                blocks.append({"type": "text", "text": text})
+    else:
+        text = _to_text(content)
+        if text:
+            blocks.append({"type": "text", "text": text})
+
+    tool_calls = message.get("tool_calls")
+    if isinstance(tool_calls, list):
+        for index, raw_call in enumerate(tool_calls, start=1):
+            if not isinstance(raw_call, dict):
+                continue
+            function_payload = raw_call.get("function")
+            if not isinstance(function_payload, dict):
+                continue
+            name = function_payload.get("name")
+            if not isinstance(name, str) or not name.strip():
+                continue
+            tool_id = raw_call.get("id")
+            if not isinstance(tool_id, str) or not tool_id.strip():
+                tool_id = f"tool_call_{index}"
+            blocks.append(
+                {
+                    "type": "tool_use",
+                    "id": tool_id,
+                    "name": name.strip(),
+                    "input": parse_json_object(function_payload.get("arguments")),
+                }
+            )
+
+    if not blocks:
+        return None
+    return blocks
+
+
+def _normalize_tool_result_message_content(message: dict[str, Any]) -> list[dict[str, Any]] | None:
+    tool_use_id = message.get("tool_call_id")
+    if not isinstance(tool_use_id, str) or not tool_use_id.strip():
+        return None
+    content_text = normalize_tool_result_content(message.get("content"))
+    return [
+        {
+            "type": "tool_result",
+            "tool_use_id": tool_use_id.strip(),
+            "content": content_text,
+        }
+    ]
 
 
 def _to_text(value: Any) -> str | None:

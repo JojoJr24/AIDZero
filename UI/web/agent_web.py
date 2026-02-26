@@ -188,7 +188,12 @@ def _run_agent_request(
     prompt_history_items = prompt_history.add_prompt(user_request)
     provider = registry.create(provider_name)
     creator = AgentCreator(provider=provider, model=resolved_model, repo_root=repo_root)
-    planning_result = creator.describe_requirements(user_request=user_request)
+    llm_invocations: list[dict[str, Any]] = []
+    planning_result = creator.describe_requirements(
+        user_request=user_request,
+        ui_name="web",
+        invocation_tracer=lambda payload: llm_invocations.append(payload),
+    )
 
     payload: dict[str, Any] = {
         "mode": "dry_run" if dry_run else "scaffold",
@@ -197,6 +202,7 @@ def _run_agent_request(
         "request": user_request,
         "plan": planning_result.plan.to_dict(),
         "prompt_history": prompt_history_items,
+        "llm_invocations": llm_invocations,
     }
     if dry_run:
         return payload
@@ -439,6 +445,7 @@ def _render_index_html() -> str:
       <h2 style="margin:0 0 10px; font-size:1.05rem; color:var(--muted);">Result</h2>
       <pre id="result">{}</pre>
     </section>
+
   </main>
 
   <script>
@@ -461,8 +468,62 @@ def _render_index_html() -> str:
       statusEl.textContent = message;
     }
 
+    function truncateText(value, maxLen = 320) {
+      const text = String(value || "").trim();
+      if (text.length <= maxLen) return text;
+      return `${text.slice(0, maxLen - 3)}...`;
+    }
+
+    function compactPlan(plan) {
+      if (!plan || typeof plan !== "object") return plan;
+      return {
+        agent_name: plan.agent_name,
+        project_folder: plan.project_folder,
+        goal: plan.goal,
+        summary: truncateText(plan.summary, 420),
+        required_llm_providers: Array.isArray(plan.required_llm_providers) ? plan.required_llm_providers : [],
+        required_skills: Array.isArray(plan.required_skills) ? plan.required_skills : [],
+        required_tools: Array.isArray(plan.required_tools) ? plan.required_tools : [],
+        required_mcp: Array.isArray(plan.required_mcp) ? plan.required_mcp : [],
+        required_ui: Array.isArray(plan.required_ui) ? plan.required_ui : [],
+        folder_blueprint_count: Array.isArray(plan.folder_blueprint) ? plan.folder_blueprint.length : 0,
+        implementation_steps_count: Array.isArray(plan.implementation_steps) ? plan.implementation_steps.length : 0,
+        warnings_count: Array.isArray(plan.warnings) ? plan.warnings.length : 0
+      };
+    }
+
+    function formatResultForDisplay(payload) {
+      if (!payload || typeof payload !== "object") return payload;
+
+      const base = {
+        mode: payload.mode,
+        provider: payload.provider,
+        model: payload.model,
+        request: payload.request,
+        plan: compactPlan(payload.plan)
+      };
+
+      if (payload.mode === "dry_run") {
+        return {
+          ...base,
+          llm_invocations_count: Array.isArray(payload.llm_invocations) ? payload.llm_invocations.length : 0,
+          prompt_history_count: Array.isArray(payload.prompt_history) ? payload.prompt_history.length : 0
+        };
+      }
+
+      if (payload.mode === "scaffold" || payload.mode === "scaffold_from_dry_run") {
+        return {
+          ...base,
+          scaffold: payload.scaffold || null,
+          prompt_history_count: Array.isArray(payload.prompt_history) ? payload.prompt_history.length : 0
+        };
+      }
+
+      return payload;
+    }
+
     function setResult(payload) {
-      resultEl.textContent = JSON.stringify(payload, null, 2);
+      resultEl.textContent = JSON.stringify(formatResultForDisplay(payload), null, 2);
     }
 
     function refillSelect(selectEl, items, selectedValue) {
@@ -539,6 +600,7 @@ def _render_index_html() -> str:
       }
       runBtn.disabled = true;
       setStatus("Running request...", "warn");
+      setInvocations({ info: "Waiting for LLM response..." });
       try {
         const response = await fetch("/api/run", {
           method: "POST",
@@ -556,6 +618,7 @@ def _render_index_html() -> str:
           throw new Error(payload.error || "Request failed.");
         }
         setResult(payload);
+        setInvocations(payload.llm_invocations || []);
         if (Array.isArray(payload.prompt_history)) {
           refillPromptHistory(payload.prompt_history);
         }
@@ -575,6 +638,7 @@ def _render_index_html() -> str:
         }
       } catch (error) {
         setStatus(String(error), "error");
+        setInvocations({ error: String(error) });
       } finally {
         runBtn.disabled = false;
       }
@@ -614,6 +678,7 @@ def _render_index_html() -> str:
           throw new Error(payload.error || "Scaffold from dry-run failed.");
         }
         setResult(payload);
+        setInvocations({ info: "No LLM call: scaffold generated from stored dry-run plan." });
         if (Array.isArray(payload.prompt_history)) {
           refillPromptHistory(payload.prompt_history);
         }
@@ -621,6 +686,7 @@ def _render_index_html() -> str:
         setStatus("Project scaffolded from dry-run successfully.", "ok");
       } catch (error) {
         setStatus(String(error), "error");
+        setInvocations({ error: String(error) });
       } finally {
         runBtn.disabled = false;
         runFromDryRunBtn.disabled = lastDryRunContext === null;
@@ -638,6 +704,7 @@ def _render_index_html() -> str:
         overwriteEl.checked = Boolean(options.overwrite);
         runFromDryRunBtn.disabled = true;
         setResult({ info: "Ready." });
+        setInvocations([]);
         if (options.model_error) {
           setStatus(`Ready (model list fallback): ${options.model_error}`, "warn");
         } else {

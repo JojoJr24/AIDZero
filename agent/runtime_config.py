@@ -1,25 +1,18 @@
-"""Runtime configuration persisted between agent executions."""
+"""Runtime configuration persistence and bootstrap selection."""
 
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
-from .models import ComponentCatalog
-from .provider_registry import ProviderRegistry
-from .ui_display import to_ui_label, to_ui_model_label
-
-CONFIG_DIR = ".aidzero"
-LEGACY_CONFIG_DIR = ".autoagent"
-CONFIG_FILENAME = "runtime_config.json"
+from agent.models import ComponentCatalog
+from agent.provider_registry import ProviderRegistry
+from agent.ui_display import to_ui_label, to_ui_model_label
 
 
-@dataclass
+@dataclass(frozen=True)
 class RuntimeConfig:
-    """Startup runtime configuration selected by the user."""
-
     ui: str
     provider: str
     model: str
@@ -27,43 +20,44 @@ class RuntimeConfig:
 
 
 class RuntimeConfigStore:
-    """Load/save runtime config under repository root."""
+    """Persistence store at `.aidzero/runtime_config.json`."""
 
     def __init__(self, repo_root: Path) -> None:
         self.repo_root = repo_root.resolve()
-        self.path = self.repo_root / CONFIG_DIR / CONFIG_FILENAME
-        self.legacy_path = self.repo_root / LEGACY_CONFIG_DIR / CONFIG_FILENAME
+        self.config_file = self.repo_root / ".aidzero" / "runtime_config.json"
 
     def load(self) -> RuntimeConfig | None:
-        for candidate in (self.path, self.legacy_path):
-            config = self._load_from_path(candidate)
-            if config:
-                return config
-        return None
-
-    def save(self, config: RuntimeConfig) -> Path:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("w", encoding="utf-8") as handle:
-            json.dump(asdict(config), handle, indent=2, ensure_ascii=False)
-        return self.path
-
-    @staticmethod
-    def _load_from_path(path: Path) -> RuntimeConfig | None:
-        if not path.exists():
+        if not self.config_file.exists():
             return None
         try:
-            with path.open("r", encoding="utf-8") as handle:
-                payload = json.load(handle)
-        except (json.JSONDecodeError, OSError):
+            payload = json.loads(self.config_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
             return None
-        generation_process_log_enabled = _coerce_bool(
-            payload.get("generation_process_log_enabled"), default=True
-        )
+        if not isinstance(payload, dict):
+            return None
+        ui = _as_str(payload.get("ui"))
+        provider = _as_str(payload.get("provider"))
+        model = _as_str(payload.get("model"))
+        if not ui or not provider:
+            return None
         return RuntimeConfig(
-            ui=str(payload.get("ui", "")).strip(),
-            provider=str(payload.get("provider", "")).strip(),
-            model=str(payload.get("model", "")).strip(),
-            generation_process_log_enabled=generation_process_log_enabled,
+            ui=ui,
+            provider=provider,
+            model=model,
+            generation_process_log_enabled=bool(payload.get("generation_process_log_enabled", True)),
+        )
+
+    def save(self, config: RuntimeConfig) -> None:
+        self.config_file.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "ui": config.ui,
+            "provider": config.provider,
+            "model": config.model,
+            "generation_process_log_enabled": config.generation_process_log_enabled,
+        }
+        self.config_file.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
         )
 
 
@@ -73,119 +67,41 @@ def ensure_runtime_config(
     provider_registry: ProviderRegistry,
     store: RuntimeConfigStore,
     reconfigure: bool = False,
-    input_fn: Callable[[str], str] = input,
-    output_fn: Callable[[str], None] = print,
 ) -> RuntimeConfig:
-    """Load existing config or run the first-time interactive setup."""
-    if not reconfigure:
-        existing = store.load()
-        if existing and _is_valid(existing, catalog, provider_registry):
-            return existing
+    existing = None if reconfigure else store.load()
+    if existing and _is_valid(existing, catalog, provider_registry):
+        return existing
 
-    config = _run_first_time_setup(
-        catalog=catalog,
-        provider_registry=provider_registry,
-        input_fn=input_fn,
-        output_fn=output_fn,
+    ui_names = [item.name for item in catalog.ui]
+    provider_names = provider_registry.names()
+    if not ui_names:
+        raise RuntimeError("No UI modules available.")
+    if not provider_names:
+        raise RuntimeError("No providers available.")
+
+    selected_ui = _prompt_select(
+        title="Select UI",
+        options=ui_names,
+        label_fn=to_ui_label,
     )
-    saved_path = store.save(config)
-    output_fn(f"Saved runtime configuration to: {saved_path}")
-    return config
-
-
-def _run_first_time_setup(
-    *,
-    catalog: ComponentCatalog,
-    provider_registry: ProviderRegistry,
-    input_fn: Callable[[str], str],
-    output_fn: Callable[[str], None],
-) -> RuntimeConfig:
-    output_fn("First-time setup: choose UI, provider, and model.")
-
-    available_ui = [item.name for item in catalog.ui]
-    if not available_ui:
-        available_ui = ["terminal"]
-    selected_ui = _select_option(
-        label="UI",
-        options=available_ui,
-        input_fn=input_fn,
-        output_fn=output_fn,
+    selected_provider = _prompt_select(
+        title="Select provider",
+        options=provider_names,
+        label_fn=to_ui_label,
     )
-
-    catalog_provider_names = {item.name for item in catalog.llm_providers}
-    selectable_providers = [name for name in provider_registry.names() if name in catalog_provider_names]
-    if not selectable_providers:
-        raise RuntimeError("No compatible providers found in LLMProviders.")
-    selected_provider = _select_option(
-        label="provider",
-        options=selectable_providers,
-        input_fn=input_fn,
-        output_fn=output_fn,
+    selected_model = _prompt_select_model(provider_registry, selected_provider)
+    generation_log_enabled = _prompt_yes_no(
+        "Enable generation process log? [Y/n]: ",
+        default=True,
     )
-
-    model_names: list[str]
-    try:
-        model_names = provider_registry.try_list_models(selected_provider)
-    except Exception as error:  # noqa: BLE001
-        output_fn(f"Could not list models automatically ({error}).")
-        model_names = []
-
-    if model_names:
-        selected_model = _select_option(
-            label="model",
-            options=model_names,
-            input_fn=input_fn,
-            output_fn=output_fn,
-            display_fn=to_ui_model_label,
-        )
-    else:
-        default_model = provider_registry.default_model(selected_provider)
-        raw_model = input_fn(f"Enter model name [{default_model}]: ").strip()
-        selected_model = raw_model or default_model
-
-    output_fn(
-        "Selected configuration:\n"
-        f"- ui: {to_ui_label(selected_ui)}\n"
-        f"- provider: {to_ui_label(selected_provider)}\n"
-        f"- model: {to_ui_model_label(selected_model)}"
-    )
-    confirm = input_fn("Save this configuration? [Y/n]: ").strip().lower()
-    if confirm in {"n", "no"}:
-        return _run_first_time_setup(
-            catalog=catalog,
-            provider_registry=provider_registry,
-            input_fn=input_fn,
-            output_fn=output_fn,
-        )
-
-    return RuntimeConfig(
+    config = RuntimeConfig(
         ui=selected_ui,
         provider=selected_provider,
         model=selected_model,
-        generation_process_log_enabled=True,
+        generation_process_log_enabled=generation_log_enabled,
     )
-
-
-def _select_option(
-    *,
-    label: str,
-    options: list[str],
-    input_fn: Callable[[str], str],
-    output_fn: Callable[[str], None],
-    display_fn: Callable[[str], str] = to_ui_label,
-) -> str:
-    output_fn(f"Available {label} options:")
-    for index, option in enumerate(options, start=1):
-        output_fn(f"  {index}. {display_fn(option)}")
-    while True:
-        raw = input_fn(f"Select {label} [1-{len(options)}]: ").strip()
-        if not raw:
-            return options[0]
-        if raw.isdigit():
-            idx = int(raw)
-            if 1 <= idx <= len(options):
-                return options[idx - 1]
-        output_fn(f"Invalid selection for {label}.")
+    store.save(config)
+    return config
 
 
 def _is_valid(
@@ -193,28 +109,64 @@ def _is_valid(
     catalog: ComponentCatalog,
     provider_registry: ProviderRegistry,
 ) -> bool:
-    if not config.ui or not config.provider or not config.model:
-        return False
     ui_names = {item.name for item in catalog.ui}
-    if ui_names and config.ui not in ui_names:
-        return False
-    if not provider_registry.has(config.provider):
-        return False
-    provider_names = {item.name for item in catalog.llm_providers}
-    if provider_names and config.provider not in provider_names:
-        return False
-    return True
+    return config.ui in ui_names and provider_registry.has(config.provider)
 
 
-def _coerce_bool(value: object, *, default: bool) -> bool:
-    if isinstance(value, bool):
-        return value
+def _as_str(value: object) -> str:
     if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in {"1", "true", "yes", "y", "on"}:
+        return value.strip()
+    return ""
+
+
+def _prompt_select(
+    *,
+    title: str,
+    options: list[str],
+    label_fn,
+) -> str:
+    print(f"\n{title}:")
+    for index, option in enumerate(options, start=1):
+        print(f"{index}. {label_fn(option)}")
+
+    while True:
+        raw = input(f"Choose 1-{len(options)} (default 1): ").strip()
+        if not raw:
+            return options[0]
+        if raw.isdigit():
+            idx = int(raw)
+            if 1 <= idx <= len(options):
+                return options[idx - 1]
+        print("Invalid selection. Please try again.")
+
+
+def _prompt_select_model(provider_registry: ProviderRegistry, provider_name: str) -> str:
+    default_model = provider_registry.default_model(provider_name)
+    try:
+        models = provider_registry.try_list_models(provider_name)
+    except Exception:
+        models = []
+    unique_models: list[str] = []
+    for model in models:
+        if model not in unique_models:
+            unique_models.append(model)
+    if default_model not in unique_models:
+        unique_models.insert(0, default_model)
+    return _prompt_select(
+        title=f"Select model for {to_ui_label(provider_name)}",
+        options=unique_models,
+        label_fn=to_ui_model_label,
+    )
+
+
+def _prompt_yes_no(prompt: str, *, default: bool) -> bool:
+    default_hint = "y" if default else "n"
+    while True:
+        raw = input(prompt).strip().lower()
+        if not raw:
+            return default
+        if raw in {"y", "yes"}:
             return True
-        if normalized in {"0", "false", "no", "n", "off"}:
+        if raw in {"n", "no"}:
             return False
-    if isinstance(value, (int, float)):
-        return bool(value)
-    return default
+        print(f"Invalid answer. Type y or n (default {default_hint}).")

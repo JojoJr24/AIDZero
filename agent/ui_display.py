@@ -1,26 +1,18 @@
-"""Shared display helpers for UI-facing labels."""
+"""UI display naming normalization helpers."""
 
 from __future__ import annotations
 
-AID_PREFIX = "AID-"
-TEST_SUFFIX = "(test)"
-
 
 def to_ui_label(value: str) -> str:
-    """Convert internal names to user-facing labels for all UIs."""
+    """Normalize non-model runtime labels for display surfaces."""
     normalized = value.strip()
     if not normalized:
         return normalized
-
-    if normalized.startswith(AID_PREFIX):
-        trimmed = normalized[len(AID_PREFIX) :].strip()
-        return trimmed or normalized
-
-    if normalized.endswith(TEST_SUFFIX):
-        return normalized
-    return f"{normalized} {TEST_SUFFIX}"
+    if normalized.startswith("AID-"):
+        return normalized.removeprefix("AID-")
+    return f"{normalized} (test)"
 
 
 def to_ui_model_label(value: str) -> str:
-    """Model names must be shown as-is in the UI."""
+    """Model labels are displayed exactly as provided."""
     return value.strip()

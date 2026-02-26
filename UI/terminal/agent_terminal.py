@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 import sys
 
@@ -16,6 +15,12 @@ from agent.provider_registry import ProviderRegistry
 from agent.prompt_history import PromptHistoryStore
 from agent.service import AgentCreator
 from agent.ui_display import to_ui_label
+
+
+def _format_list(values: list[str]) -> str:
+    if not values:
+        return "(none)"
+    return ", ".join(values)
 
 
 def parse_args() -> argparse.Namespace:
@@ -84,14 +89,25 @@ def run_terminal_agent(
 
     creator = AgentCreator(provider=provider, model=selected_model_name, repo_root=root)
     try:
-        planning_result = creator.describe_requirements(user_request=request)
+        planning_result = creator.describe_requirements(user_request=request, ui_name="terminal")
     except Exception as error:  # noqa: BLE001
         print(f"error> planning failed: {error}")
         return 1
 
     print("\n=== Agent Plan ===")
-    print(json.dumps(planning_result.plan.to_dict(), indent=2, ensure_ascii=False))
-    print(f"\nPlanned project folder: {planning_result.plan.project_folder}")
+    print(f"Agent: {planning_result.plan.agent_name}")
+    print(f"Project folder: {planning_result.plan.project_folder}")
+    print(f"Goal: {planning_result.plan.goal}")
+    summary = planning_result.plan.summary.strip()
+    if len(summary) > 420:
+        summary = summary[:417].rstrip() + "..."
+    print(f"Summary: {summary}")
+    print("Requirements:")
+    print(f"- Providers: {_format_list(planning_result.plan.required_llm_providers)}")
+    print(f"- Skills: {_format_list(planning_result.plan.required_skills)}")
+    print(f"- Tools: {_format_list(planning_result.plan.required_tools)}")
+    print(f"- MCP: {_format_list(planning_result.plan.required_mcp)}")
+    print(f"- UI: {_format_list(planning_result.plan.required_ui)}")
 
     if dry_run:
         return 0

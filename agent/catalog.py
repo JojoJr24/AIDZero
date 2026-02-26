@@ -1,15 +1,15 @@
-"""Repository discovery and component cataloging."""
+"""Component catalog discovery for runtime modules."""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
-from .models import ComponentCatalog, ComponentItem
+from agent.models import ComponentCatalog, ComponentItem
 
 
 class ComponentCatalogBuilder:
-    """Builds a component catalog from repository folders."""
+    """Build a repository component catalog from conventional folders."""
 
     def __init__(self, repo_root: Path) -> None:
         self.repo_root = repo_root.resolve()
@@ -17,121 +17,148 @@ class ComponentCatalogBuilder:
     def build(self) -> ComponentCatalog:
         return ComponentCatalog(
             root=self.repo_root,
-            llm_providers=self._discover_llm_providers(),
+            llm_providers=self._discover_providers(),
             skills=self._discover_skills(),
             tools=self._discover_tools(),
             mcp=self._discover_mcp(),
             ui=self._discover_ui(),
         )
 
-    def _discover_llm_providers(self) -> list[ComponentItem]:
-        base_dir = self.repo_root / "LLMProviders"
+    def _discover_providers(self) -> list[ComponentItem]:
+        providers_root = self.repo_root / "LLMProviders"
         items: list[ComponentItem] = []
-        if not base_dir.is_dir():
+        if not providers_root.is_dir():
             return items
-
-        for entry in self._iter_visible_entries(base_dir):
-            if not entry.is_dir():
+        for entry in sorted(providers_root.iterdir(), key=lambda item: item.name.lower()):
+            if not entry.is_dir() or not entry.name.startswith("AID-"):
                 continue
-            provider_file = entry / "provider.py"
-            if not provider_file.exists():
+            provider_py = entry / "provider.py"
+            if not provider_py.is_file():
                 continue
             items.append(
                 ComponentItem(
                     name=entry.name,
                     path=entry.relative_to(self.repo_root),
-                    kind="llm_provider",
-                    description=self._read_provider_description(provider_file),
+                    description=f"Provider adapter in {entry.name}",
                 )
             )
         return items
 
     def _discover_skills(self) -> list[ComponentItem]:
-        base_dir = self.repo_root / "SKILLS"
+        skills_root = self.repo_root / "SKILLS"
         items: list[ComponentItem] = []
-        if not base_dir.is_dir():
+        if not skills_root.is_dir():
             return items
-
-        for entry in self._iter_visible_entries(base_dir):
+        for entry in sorted(skills_root.iterdir(), key=lambda item: item.name.lower()):
             if not entry.is_dir():
                 continue
-            skill_doc = entry / "SKILL.md"
-            if not skill_doc.exists():
+            skill_md = entry / "SKILL.md"
+            if not skill_md.is_file():
                 continue
             items.append(
                 ComponentItem(
                     name=entry.name,
                     path=entry.relative_to(self.repo_root),
-                    kind="skill",
-                    description=self._read_first_meaningful_line(skill_doc),
+                    description=_extract_frontmatter_description(skill_md),
                 )
             )
         return items
 
     def _discover_tools(self) -> list[ComponentItem]:
-        return self._discover_generic_folder(folder_name="TOOLS", kind="tool")
-
-    def _discover_mcp(self) -> list[ComponentItem]:
-        return self._discover_generic_folder(folder_name="MCP", kind="mcp")
-
-    def _discover_ui(self) -> list[ComponentItem]:
-        return self._discover_generic_folder(folder_name="UI", kind="ui")
-
-    def _discover_generic_folder(self, *, folder_name: str, kind: str) -> list[ComponentItem]:
-        base_dir = self.repo_root / folder_name
+        tools_root = self.repo_root / "TOOLS"
         items: list[ComponentItem] = []
-        if not base_dir.is_dir():
+        if not tools_root.is_dir():
             return items
-
-        for entry in self._iter_visible_entries(base_dir):
-            description = self._infer_folder_description(entry)
+        for entry in sorted(tools_root.iterdir(), key=lambda item: item.name.lower()):
+            if not entry.is_dir():
+                continue
+            tool_py = entry / "tool.py"
+            if not tool_py.is_file():
+                continue
             items.append(
                 ComponentItem(
                     name=entry.name,
                     path=entry.relative_to(self.repo_root),
-                    kind=kind,
-                    description=description,
+                    description=f"Tool wrapper at {entry.name}/tool.py",
                 )
             )
         return items
 
-    @staticmethod
-    def _iter_visible_entries(base_dir: Path) -> list[Path]:
-        return sorted(
-            [path for path in base_dir.iterdir() if not path.name.startswith(".")],
-            key=lambda path: path.name.lower(),
-        )
+    def _discover_mcp(self) -> list[ComponentItem]:
+        mcp_root = self.repo_root / "MCP"
+        if not mcp_root.is_dir():
+            return []
+        items: list[ComponentItem] = []
+        gateway_entry = mcp_root / "AID-tool-gateway"
+        if gateway_entry.is_dir():
+            items.append(
+                ComponentItem(
+                    name="AID-tool-gateway",
+                    path=gateway_entry.relative_to(self.repo_root),
+                    description="MCP stdio tool gateway",
+                )
+            )
 
-    def _read_provider_description(self, provider_file: Path) -> str | None:
-        with provider_file.open("r", encoding="utf-8") as handle:
-            first_line = handle.readline().strip().strip('"').strip("'")
-        return first_line if first_line else None
+        config_file = mcp_root / "mcporter.json"
+        if config_file.is_file():
+            server_names = _extract_mcp_server_names(config_file)
+            for server_name in server_names:
+                items.append(
+                    ComponentItem(
+                        name=server_name,
+                        path=config_file.relative_to(self.repo_root),
+                        description="Configured MCP server",
+                    )
+                )
+        return items
 
-    def _read_first_meaningful_line(self, text_file: Path) -> str | None:
-        with text_file.open("r", encoding="utf-8") as handle:
-            for raw_line in handle:
-                line = raw_line.strip()
-                if not line:
-                    continue
-                if line.startswith("#"):
-                    return line.lstrip("#").strip()
-                return line
+    def _discover_ui(self) -> list[ComponentItem]:
+        ui_root = self.repo_root / "UI"
+        items: list[ComponentItem] = []
+        if not ui_root.is_dir():
+            return items
+        for entry in sorted(ui_root.iterdir(), key=lambda item: item.name.lower()):
+            if not entry.is_dir():
+                continue
+            entrypoint_file = entry / "entrypoint.py"
+            if not entrypoint_file.is_file():
+                continue
+            items.append(
+                ComponentItem(
+                    name=entry.name,
+                    path=entry.relative_to(self.repo_root),
+                    description=f"Runnable UI at UI/{entry.name}/entrypoint.py",
+                )
+            )
+        return items
+
+
+def _extract_frontmatter_description(path: Path) -> str | None:
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
         return None
+    in_frontmatter = False
+    for raw_line in lines:
+        line = raw_line.strip()
+        if line == "---":
+            in_frontmatter = not in_frontmatter
+            continue
+        if in_frontmatter and line.startswith("description:"):
+            value = line.split(":", 1)[1].strip()
+            return value.strip('"').strip("'")
+    return None
 
-    def _infer_folder_description(self, entry: Path) -> str | None:
-        if entry.is_file():
-            return None
-        package_json = entry / "package.json"
-        if package_json.exists():
-            try:
-                with package_json.open("r", encoding="utf-8") as handle:
-                    payload = json.load(handle)
-            except json.JSONDecodeError:
-                return None
-            description = payload.get("description")
-            if isinstance(description, str):
-                return description
-        readme = entry / "README.md"
-        if readme.exists():
-            return self._read_first_meaningful_line(readme)
-        return None
+
+def _extract_mcp_server_names(config_path: Path) -> list[str]:
+    try:
+        payload = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(payload, dict):
+        return []
+    servers = payload.get("mcpServers")
+    if not isinstance(servers, dict):
+        return []
+    names = [name for name in servers.keys() if isinstance(name, str) and name.strip()]
+    return sorted(names)

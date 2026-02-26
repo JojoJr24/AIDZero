@@ -1,12 +1,6 @@
-"""Core agent that designs and scaffolds new agent projects."""
+"""Core AIDZero runtime package."""
 
-from .models import AgentPlan, ComponentCatalog, ComponentItem, ScaffoldResult
-from .service import AgentCreator
+from agent.models import AgentPlan, ComponentCatalog
+from agent.service import AgentCreator
 
-__all__ = [
-    "AgentCreator",
-    "AgentPlan",
-    "ComponentCatalog",
-    "ComponentItem",
-    "ScaffoldResult",
-]
+__all__ = ["AgentCreator", "AgentPlan", "ComponentCatalog"]

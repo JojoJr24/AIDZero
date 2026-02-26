@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Iterable, Iterator
 from typing import Any
 
-from agent.provider_base import ProviderError
+from LLMProviders.provider_base import ProviderError, normalize_tool_result_content
 
 
 class OpenAICompatibleProviderError(ProviderError):
@@ -48,6 +49,9 @@ class OpenAICompatibleProvider:
         self.api_key = resolved_api_key
         self.timeout = timeout
         self.error_cls = error_cls
+        self._stream_lock = threading.Lock()
+        self._active_stream_response: Any | None = None
+        self._stop_requested = False
 
     def list_models(self, *, page_size: int = 100) -> list[dict[str, Any]]:
         del page_size  # Not supported consistently by OpenAI-compatible servers.
@@ -72,16 +76,12 @@ class OpenAICompatibleProvider:
         *,
         system_instruction: Any = None,
         generation_config: dict[str, Any] | None = None,
-        tools: list[dict[str, Any]] | None = None,
-        tool_choice: Any = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
         payload = self._build_chat_payload(
             model=model,
             messages=_normalize_messages(contents, system_instruction=system_instruction),
             generation_config=generation_config,
-            tools=tools,
-            tool_choice=tool_choice,
             extra=kwargs,
         )
         return self._request_json("POST", "/chat/completions", payload=payload)
@@ -93,16 +93,12 @@ class OpenAICompatibleProvider:
         *,
         system_instruction: Any = None,
         generation_config: dict[str, Any] | None = None,
-        tools: list[dict[str, Any]] | None = None,
-        tool_choice: Any = None,
         **kwargs: Any,
     ) -> Iterator[dict[str, Any]]:
         payload = self._build_chat_payload(
             model=model,
             messages=_normalize_messages(contents, system_instruction=system_instruction),
             generation_config=generation_config,
-            tools=tools,
-            tool_choice=tool_choice,
             extra={**kwargs, "stream": True},
         )
         return self._stream_json_events("POST", "/chat/completions", payload=payload)
@@ -150,16 +146,12 @@ class OpenAICompatibleProvider:
         messages: list[dict[str, Any]],
         *,
         generation_config: dict[str, Any] | None = None,
-        tools: list[dict[str, Any]] | None = None,
-        tool_choice: Any = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
         payload = self._build_chat_payload(
             model=model,
             messages=_normalize_messages(messages, system_instruction=None),
             generation_config=generation_config,
-            tools=tools,
-            tool_choice=tool_choice,
             extra=kwargs,
         )
         return self._request_json("POST", "/chat/completions", payload=payload)
@@ -170,19 +162,25 @@ class OpenAICompatibleProvider:
         messages: list[dict[str, Any]],
         *,
         generation_config: dict[str, Any] | None = None,
-        tools: list[dict[str, Any]] | None = None,
-        tool_choice: Any = None,
         **kwargs: Any,
     ) -> Iterator[dict[str, Any]]:
         payload = self._build_chat_payload(
             model=model,
             messages=_normalize_messages(messages, system_instruction=None),
             generation_config=generation_config,
-            tools=tools,
-            tool_choice=tool_choice,
             extra={**kwargs, "stream": True},
         )
         return self._stream_json_events("POST", "/chat/completions", payload=payload)
+
+    def stop_stream(self) -> None:
+        with self._stream_lock:
+            self._stop_requested = True
+            response = self._active_stream_response
+        if response is None:
+            return
+        close = getattr(response, "close", None)
+        if callable(close):
+            close()
 
     def count_tokens(self, model: str, contents: Any, **kwargs: Any) -> dict[str, Any]:
         del model, contents, kwargs
@@ -216,14 +214,76 @@ class OpenAICompatibleProvider:
                 payload[key] = value
         return self._request_json("POST", "/embeddings", payload=payload)
 
+    def supports_tool_calling(self) -> bool:
+        return True
+
+    def extract_tool_calls(self, response: dict[str, Any]) -> list[dict[str, Any]]:
+        tool_calls: list[dict[str, Any]] = []
+        choices = response.get("choices")
+        if not isinstance(choices, list):
+            return tool_calls
+
+        for choice in choices:
+            if not isinstance(choice, dict):
+                continue
+            message = choice.get("message")
+            if not isinstance(message, dict):
+                continue
+            raw_tool_calls = message.get("tool_calls")
+            if not isinstance(raw_tool_calls, list):
+                continue
+            for index, raw_call in enumerate(raw_tool_calls, start=1):
+                if not isinstance(raw_call, dict):
+                    continue
+                function_payload = raw_call.get("function")
+                if not isinstance(function_payload, dict):
+                    continue
+                name = function_payload.get("name")
+                if not isinstance(name, str) or not name.strip():
+                    continue
+                arguments = function_payload.get("arguments")
+                normalized_arguments = arguments if isinstance(arguments, str) else _safe_json_text(arguments)
+                call_id = raw_call.get("id")
+                if not isinstance(call_id, str) or not call_id.strip():
+                    call_id = f"tool_call_{index}"
+                tool_calls.append(
+                    {
+                        "id": call_id,
+                        "type": "function",
+                        "function": {
+                            "name": name.strip(),
+                            "arguments": normalized_arguments,
+                        },
+                    }
+                )
+        return tool_calls
+
+    def build_tool_result_message(
+        self,
+        *,
+        tool_call_id: str,
+        name: str,
+        result: Any,
+    ) -> dict[str, Any]:
+        normalized_id = tool_call_id.strip()
+        if not normalized_id:
+            raise ValueError("tool_call_id cannot be empty.")
+        normalized_name = name.strip()
+        if not normalized_name:
+            raise ValueError("name cannot be empty.")
+        return {
+            "role": "tool",
+            "tool_call_id": normalized_id,
+            "name": normalized_name,
+            "content": normalize_tool_result_content(result),
+        }
+
     def _build_chat_payload(
         self,
         *,
         model: str,
         messages: list[dict[str, Any]],
         generation_config: dict[str, Any] | None,
-        tools: list[dict[str, Any]] | None,
-        tool_choice: Any,
         extra: dict[str, Any],
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -234,10 +294,6 @@ class OpenAICompatibleProvider:
             for key, value in generation_config.items():
                 if value is not None:
                     payload[key] = value
-        if tools is not None:
-            payload["tools"] = tools
-        if tool_choice is not None:
-            payload["tool_choice"] = tool_choice
         for key, value in extra.items():
             if value is not None:
                 payload[key] = value
@@ -294,23 +350,38 @@ class OpenAICompatibleProvider:
         )
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                for raw_payload in _iter_sse_payloads(response):
-                    if raw_payload == "[DONE]":
-                        break
-                    try:
-                        parsed = json.loads(raw_payload)
-                    except json.JSONDecodeError as error:
-                        raise self.error_cls(
-                            f"{self.provider_label} stream returned invalid JSON: "
-                            f"{raw_payload[:300]}"
-                        ) from error
-                    if isinstance(parsed, dict):
-                        yield parsed
+                self._register_active_stream(response)
+                try:
+                    for raw_payload in _iter_sse_payloads(response):
+                        if self._is_stop_requested():
+                            break
+                        if raw_payload == "[DONE]":
+                            break
+                        try:
+                            parsed = json.loads(raw_payload)
+                        except json.JSONDecodeError as error:
+                            raise self.error_cls(
+                                f"{self.provider_label} stream returned invalid JSON: "
+                                f"{raw_payload[:300]}"
+                            ) from error
+                        if isinstance(parsed, dict):
+                            yield parsed
+                finally:
+                    self._clear_active_stream(response)
         except urllib.error.HTTPError as error:
+            if self._consume_stop_requested():
+                return
             raise self.error_cls(self._format_http_error(error)) from error
         except urllib.error.URLError as error:
+            if self._consume_stop_requested():
+                return
             reason = getattr(error, "reason", str(error))
             raise self.error_cls(f"{self.provider_label} stream connection error: {reason}") from error
+        except Exception:
+            if self._consume_stop_requested():
+                return
+            raise
+        self._consume_stop_requested()
 
     def _build_headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
@@ -349,6 +420,26 @@ class OpenAICompatibleProvider:
             elif isinstance(parsed.get("message"), str):
                 message = str(parsed["message"])
         return f"{self.provider_label} API HTTP {error.code}: {message}"
+
+    def _register_active_stream(self, response: Any) -> None:
+        with self._stream_lock:
+            self._active_stream_response = response
+            self._stop_requested = False
+
+    def _clear_active_stream(self, response: Any) -> None:
+        with self._stream_lock:
+            if self._active_stream_response is response:
+                self._active_stream_response = None
+
+    def _is_stop_requested(self) -> bool:
+        with self._stream_lock:
+            return self._stop_requested
+
+    def _consume_stop_requested(self) -> bool:
+        with self._stream_lock:
+            requested = self._stop_requested
+            self._stop_requested = False
+            return requested
 
 
 def extract_text_from_chat_completion(
@@ -542,4 +633,3 @@ def _iter_sse_payloads(stream: Iterable[bytes]) -> Iterator[str]:
         payload = "\n".join(row[5:].lstrip() for row in event_lines if row.startswith("data:")).strip()
         if payload:
             yield payload
-

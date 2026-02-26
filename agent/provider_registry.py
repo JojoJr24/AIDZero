@@ -1,112 +1,88 @@
-"""Provider registration and factory helpers for the AIDZero runtime."""
+"""Discovery and factory utilities for provider adapters."""
 
 from __future__ import annotations
 
 import importlib.util
-from dataclasses import dataclass
+import inspect
 from pathlib import Path
 from typing import Any
 
+from LLMProviders.provider_base import LLMProvider
 
-@dataclass(frozen=True)
-class ProviderSpec:
-    """Single provider registration entry."""
-
-    name: str
-    entrypoint: Path
-    class_name: str
-    default_model: str
+DEFAULT_MODEL_BY_PROVIDER: dict[str, str] = {
+    "AID-openai": "gpt-4o-mini",
+    "AID-google_gemini": "gemini-2.5-flash",
+    "AID-claude": "claude-3-5-sonnet-latest",
+    "AID-ollama": "llama3.2",
+    "AID-lmstudio": "gpt-4o-mini",
+    "AID-llamacpp": "llama3.2",
+}
 
 
 class ProviderRegistry:
-    """Creates provider instances from provider names."""
+    """Load and instantiate provider adapters from `LLMProviders/AID-*/provider.py`."""
 
-    def __init__(self, repo_root: Path | None = None) -> None:
-        self.repo_root = (repo_root or Path.cwd()).resolve()
-        self._providers: dict[str, ProviderSpec] = {
-            "AID-google_gemini": ProviderSpec(
-                name="AID-google_gemini",
-                entrypoint=self.repo_root / "LLMProviders" / "AID-google_gemini" / "provider.py",
-                class_name="GeminiProvider",
-                default_model="gemini-2.5-flash",
-            ),
-            "AID-openai": ProviderSpec(
-                name="AID-openai",
-                entrypoint=self.repo_root / "LLMProviders" / "AID-openai" / "provider.py",
-                class_name="OpenAIProvider",
-                default_model="gpt-4o-mini",
-            ),
-            "AID-claude": ProviderSpec(
-                name="AID-claude",
-                entrypoint=self.repo_root / "LLMProviders" / "AID-claude" / "provider.py",
-                class_name="ClaudeProvider",
-                default_model="claude-3-5-sonnet-latest",
-            ),
-            "AID-ollama": ProviderSpec(
-                name="AID-ollama",
-                entrypoint=self.repo_root / "LLMProviders" / "AID-ollama" / "provider.py",
-                class_name="OllamaProvider",
-                default_model="llama3.1",
-            ),
-            "AID-lmstudio": ProviderSpec(
-                name="AID-lmstudio",
-                entrypoint=self.repo_root / "LLMProviders" / "AID-lmstudio" / "provider.py",
-                class_name="LMStudioProvider",
-                default_model="local-model",
-            ),
-            "AID-llamacpp": ProviderSpec(
-                name="AID-llamacpp",
-                entrypoint=self.repo_root / "LLMProviders" / "AID-llamacpp" / "provider.py",
-                class_name="LlamaCppProvider",
-                default_model="local-model",
-            ),
-        }
+    def __init__(self, repo_root: Path) -> None:
+        self.repo_root = repo_root.resolve()
+        self.providers_root = self.repo_root / "LLMProviders"
 
     def names(self) -> list[str]:
-        return sorted(self._providers.keys())
+        names: list[str] = []
+        if not self.providers_root.is_dir():
+            return names
+        for entry in sorted(self.providers_root.iterdir(), key=lambda item: item.name.lower()):
+            if not entry.is_dir() or not entry.name.startswith("AID-"):
+                continue
+            if (entry / "provider.py").is_file():
+                names.append(entry.name)
+        return names
 
     def has(self, provider_name: str) -> bool:
-        return provider_name in self._providers
-
-    def create(self, provider_name: str) -> Any:
-        spec = self._providers.get(provider_name)
-        if spec is None:
-            raise ValueError(f"Unknown provider: {provider_name}")
-        provider_class = self._load_provider_class(spec)
-        return provider_class()
+        return provider_name.strip() in set(self.names())
 
     def default_model(self, provider_name: str) -> str:
-        spec = self._providers.get(provider_name)
-        if spec is None:
-            raise ValueError(f"Unknown provider: {provider_name}")
-        return spec.default_model
+        normalized = provider_name.strip()
+        if normalized in DEFAULT_MODEL_BY_PROVIDER:
+            return DEFAULT_MODEL_BY_PROVIDER[normalized]
+        return "gpt-4o-mini"
 
     def try_list_models(self, provider_name: str) -> list[str]:
         provider = self.create(provider_name)
-        model_names = provider.list_model_names()
-        return [name for name in model_names if isinstance(name, str) and name.strip()]
+        return provider.list_model_names()
 
-    @staticmethod
-    def _load_provider_class(spec: ProviderSpec) -> type:
-        if not spec.entrypoint.exists():
-            raise FileNotFoundError(f"Provider entrypoint not found: {spec.entrypoint}")
+    def create(self, provider_name: str) -> LLMProvider:
+        normalized_name = provider_name.strip()
+        if not normalized_name:
+            raise ValueError("provider_name cannot be empty.")
+        module_path = self.providers_root / normalized_name / "provider.py"
+        if not module_path.is_file():
+            raise FileNotFoundError(f"Provider module not found: {module_path}")
 
-        module_name = _module_name_from_provider(spec.name)
-        module_spec = importlib.util.spec_from_file_location(module_name, spec.entrypoint)
-        if module_spec is None or module_spec.loader is None:
-            raise ImportError(f"Could not load provider module from: {spec.entrypoint}")
+        module_name = f"aidzero_provider_{normalized_name.replace('-', '_')}"
+        spec = importlib.util.spec_from_file_location(module_name, module_path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"Unable to load provider module: {module_path}")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
 
-        module = importlib.util.module_from_spec(module_spec)
-        module_spec.loader.exec_module(module)
-
-        provider_class = getattr(module, spec.class_name, None)
-        if provider_class is None:
-            raise AttributeError(
-                f"Provider class '{spec.class_name}' not found in {spec.entrypoint}"
-            )
-        return provider_class
+        provider_cls = _find_provider_class(module)
+        provider = provider_cls()
+        return provider
 
 
-def _module_name_from_provider(provider_name: str) -> str:
-    sanitized = provider_name.lower().replace("-", "_")
-    return f"aidzero_provider_{sanitized}"
+def _find_provider_class(module: Any) -> type[LLMProvider]:
+    candidates: list[type[Any]] = []
+    for _, member in inspect.getmembers(module, inspect.isclass):
+        if member.__module__ != module.__name__:
+            continue
+        if not member.__name__.endswith("Provider"):
+            continue
+        if member.__name__ == "OpenAICompatibleProvider":
+            continue
+        candidates.append(member)
+    if not candidates:
+        raise RuntimeError(f"No provider class found in module '{module.__name__}'.")
+    if len(candidates) == 1:
+        return candidates[0]
+    candidates.sort(key=lambda item: item.__name__)
+    return candidates[0]

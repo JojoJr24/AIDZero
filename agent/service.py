@@ -1,90 +1,65 @@
-"""High-level orchestration service for creating new agents."""
+"""High-level runtime service used by terminal and web UIs."""
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import json
-from dataclasses import dataclass
 from pathlib import Path
-import traceback
-from typing import Any
+import re
+import shutil
+from datetime import UTC, datetime
 
-from .catalog import ComponentCatalogBuilder
-from .entrypoint_writer import AgentEntrypointWriter
-from .models import AgentPlan, ComponentCatalog, ScaffoldResult
-from .planner import AgentPlanner
-from .runtime_config import RuntimeConfigStore
-from .scaffold import AgentScaffolder
-
-PROCESS_LOG_FILENAME = "generation_process.log"
-
-
-@dataclass
-class AgentCreationResult:
-    """Combined output of planning and scaffolding."""
-
-    catalog: ComponentCatalog
-    plan: AgentPlan
-    scaffold: ScaffoldResult | None = None
+from LLMProviders.provider_base import LLMProvider
+from agent.catalog import ComponentCatalogBuilder
+from agent.models import AgentPlan, ComponentCatalog, PlanningResult, ScaffoldResult
+from agent.provider_base import InvocationTracer, ProviderBaseRuntime
 
 
 class AgentCreator:
-    """Core agent that plans and builds a new agent project."""
+    """Core orchestrator invoked by UIs."""
 
-    def __init__(
-        self,
-        *,
-        provider: Any,
-        model: str,
-        repo_root: Path | None = None,
-        temperature: float = 0.1,
-        generation_process_log_enabled: bool | None = None,
-    ) -> None:
-        self.repo_root = (repo_root or Path.cwd()).resolve()
+    def __init__(self, *, provider: LLMProvider, model: str, repo_root: Path) -> None:
         self.provider = provider
-        self.model = model
-        self.catalog_builder = ComponentCatalogBuilder(self.repo_root)
-        self.planner = AgentPlanner(provider=provider, model=model, temperature=temperature)
-        self.entrypoint_writer = AgentEntrypointWriter(
-            provider=provider,
-            model=model,
-            temperature=temperature,
-        )
-        self.scaffolder = AgentScaffolder(self.repo_root)
-        self._generation_process_log_enabled = generation_process_log_enabled
+        self.model = model.strip()
+        self.repo_root = repo_root.resolve()
 
     def scan_components(self) -> ComponentCatalog:
-        """Read all reusable components from repository folders."""
-        return self.catalog_builder.build()
+        return ComponentCatalogBuilder(self.repo_root).build()
 
-    def describe_requirements(self, user_request: str) -> AgentCreationResult:
-        """Ask the LLM to describe what the requested agent needs."""
-        catalog = self.scan_components()
-        plan = self.planner.plan(user_request=user_request, catalog=catalog)
-        return AgentCreationResult(catalog=catalog, plan=plan)
-
-    def create_agent_project(
+    def respond_to_prompt(
         self,
         *,
         user_request: str,
-        overwrite: bool = False,
-    ) -> AgentCreationResult:
-        """
-        Plan and scaffold a new agent project.
-
-        This forks a child workspace by copying only the parent environment folders
-        (LLMProviders, MCP, SKILLS, TOOLS, UI, .aidzero), then writes generated
-        child files (main.py and agent/* runtime/context files).
-        """
-        result = self.describe_requirements(user_request=user_request)
-        scaffold = self.create_agent_project_from_plan(
-            user_request=user_request,
-            plan=result.plan,
-            catalog=result.catalog,
-            overwrite=overwrite,
+        ui_name: str | None = None,
+        invocation_tracer: InvocationTracer | None = None,
+    ) -> str:
+        catalog = self.scan_components()
+        runtime = ProviderBaseRuntime(
+            provider=self.provider,
+            model=self.model,
+            repo_root=self.repo_root,
+            catalog=catalog,
         )
-        result.scaffold = scaffold
-        return result
+        return runtime.ask(prompt=user_request, ui_name=ui_name, invocation_tracer=invocation_tracer)
+
+    def describe_requirements(
+        self,
+        *,
+        user_request: str,
+        ui_name: str | None = None,
+        invocation_tracer: InvocationTracer | None = None,
+    ) -> PlanningResult:
+        catalog = self.scan_components()
+        response_text = self.respond_to_prompt(
+            user_request=user_request,
+            ui_name=ui_name,
+            invocation_tracer=invocation_tracer,
+        )
+        plan = _build_plan_from_response(
+            user_request=user_request,
+            response_text=response_text,
+            catalog=catalog,
+        )
+        return PlanningResult(plan=plan, catalog=catalog, response_text=response_text)
 
     def create_agent_project_from_plan(
         self,
@@ -94,114 +69,163 @@ class AgentCreator:
         catalog: ComponentCatalog,
         overwrite: bool = False,
     ) -> ScaffoldResult:
-        """Generate main.py and scaffold the destination child-agent fork."""
-        destination = self.resolve_destination_from_plan(plan)
-        process_logger = _GenerationProcessLogger(
-            destination / PROCESS_LOG_FILENAME,
-            enabled=self._resolve_process_log_enabled(),
+        destination = self.repo_root / "generated_agents" / plan.project_folder
+        if destination.exists():
+            if not overwrite:
+                raise FileExistsError(
+                    f"Destination already exists: {destination}. Use overwrite=True to continue."
+                )
+            if destination.is_dir():
+                shutil.rmtree(destination)
+            else:
+                destination.unlink()
+        destination.mkdir(parents=True, exist_ok=False)
+
+        created_directories: list[Path] = [destination]
+        copied_items: list[Path] = []
+
+        for component_dir in ("LLMProviders", "TOOLS", "SKILLS", "MCP", "UI"):
+            source = self.repo_root / component_dir
+            target = destination / component_dir
+            if not source.exists():
+                continue
+            if source.is_dir():
+                shutil.copytree(source, target, dirs_exist_ok=True)
+                created_directories.append(target)
+            else:
+                shutil.copy2(source, target)
+            copied_items.append(target)
+
+        main_file = destination / "main.py"
+        main_file.write_text(
+            (
+                "#!/usr/bin/env python3\n"
+                '"""Generated child runtime bootstrap."""\n\n'
+                "from __future__ import annotations\n\n"
+                "from pathlib import Path\n"
+                "import subprocess\n"
+                "import sys\n\n"
+                "ROOT = Path(__file__).resolve().parent\n\n"
+                "def main() -> int:\n"
+                "    cmd = [sys.executable, str(ROOT / 'AIDZero.py'), *sys.argv[1:]]\n"
+                "    return subprocess.run(cmd, cwd=ROOT).returncode\n\n"
+                "if __name__ == '__main__':\n"
+                "    raise SystemExit(main())\n"
+            ),
+            encoding="utf-8",
         )
-        process_logger.log(f"generation started for agent '{plan.agent_name}'")
-        process_logger.log(f"user request: {user_request.strip()}")
-        process_logger.log(f"project folder: {plan.project_folder}")
-        process_logger.log(
-            "selected components: "
-            f"providers={plan.required_llm_providers}, "
-            f"skills={plan.required_skills}, "
-            f"tools={plan.required_tools}, "
-            f"mcp={plan.required_mcp}, "
-            f"ui={plan.required_ui}"
+
+        runtime_config_file = destination / "agent_config.json"
+        runtime_config_file.write_text(
+            json.dumps(
+                {
+                    "provider": plan.required_llm_providers[0] if plan.required_llm_providers else None,
+                    "model": self.model,
+                    "goal": plan.goal,
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+            + "\n",
+            encoding="utf-8",
         )
-        if plan.warnings:
-            process_logger.log(f"plan warnings: {json.dumps(plan.warnings, ensure_ascii=False)}")
 
-        try:
-            process_logger.log("generating child entrypoint source (main.py)")
-            main_py_source = self.entrypoint_writer.generate_main_py(
-                user_request=user_request,
-                plan=plan,
+        metadata_file = destination / "agent" / "child_manifest.json"
+        metadata_file.parent.mkdir(parents=True, exist_ok=True)
+        metadata_file.write_text(
+            json.dumps(
+                {
+                    "request": user_request,
+                    "plan": plan.to_dict(),
+                    "catalog_counts": {
+                        "providers": len(catalog.llm_providers),
+                        "skills": len(catalog.skills),
+                        "tools": len(catalog.tools),
+                        "mcp": len(catalog.mcp),
+                        "ui": len(catalog.ui),
+                    },
+                },
+                indent=2,
+                ensure_ascii=False,
             )
-            process_logger.log("entrypoint generation completed")
+            + "\n",
+            encoding="utf-8",
+        )
 
-            process_logger.log("starting filesystem scaffold")
-            scaffold_result = self.scaffolder.scaffold(
-                destination=destination,
-                plan=plan,
-                catalog=catalog,
-                user_request=user_request,
-                main_py_source=main_py_source,
-                overwrite=overwrite,
-                process_logger=process_logger.log,
-                process_logger_ready=process_logger.activate,
-            )
-            scaffold_result.process_log_file = process_logger.log_file
-            process_logger.log(
-                "scaffold completed successfully: "
-                f"created_directories={len(scaffold_result.created_directories)}, "
-                f"copied_items={len(scaffold_result.copied_items)}"
-            )
-            return scaffold_result
-        except Exception as error:  # noqa: BLE001
-            process_logger.log(f"generation failed: {error}")
-            process_logger.log(traceback.format_exc().rstrip())
-            process_logger.activate()
-            raise
-
-    def resolve_destination_from_plan(self, plan: AgentPlan) -> Path:
-        """Resolve a safe destination path from plan.project_folder."""
-        sanitized = _sanitize_relative_path(plan.project_folder)
-        return self.repo_root / sanitized
-
-    def _resolve_process_log_enabled(self) -> bool:
-        if self._generation_process_log_enabled is not None:
-            return self._generation_process_log_enabled
-        try:
-            config = RuntimeConfigStore(self.repo_root).load()
-        except Exception:  # noqa: BLE001
-            return True
-        if config is None:
-            return True
-        return bool(config.generation_process_log_enabled)
+        process_log_file = destination / "generation_process.log"
+        timestamp = datetime.now(UTC).isoformat()
+        process_log_file.write_text(
+            (
+                f"{timestamp} | request received\n"
+                f"{timestamp} | plan generated: {plan.agent_name}\n"
+                f"{timestamp} | scaffold created at {destination}\n"
+            ),
+            encoding="utf-8",
+        )
+        return ScaffoldResult(
+            destination=destination,
+            created_directories=created_directories,
+            copied_items=copied_items,
+            entrypoint_file=main_file,
+            runtime_config_file=runtime_config_file,
+            metadata_file=metadata_file,
+            process_log_file=process_log_file,
+        )
 
 
-def _sanitize_relative_path(path_value: str) -> Path:
-    candidate = path_value.strip().strip("/")
-    if not candidate:
-        raise ValueError("Plan project_folder is empty.")
-    parts = [part for part in candidate.split("/") if part and part != "."]
-    if not parts or any(part == ".." for part in parts):
-        raise ValueError(f"Unsafe project_folder in plan: {path_value}")
-    return Path(*parts)
+def _build_plan_from_response(
+    *,
+    user_request: str,
+    response_text: str,
+    catalog: ComponentCatalog,
+) -> AgentPlan:
+    normalized_request = user_request.strip()
+    project_folder = _slugify(normalized_request)[:48] or "agent_project"
+    if not project_folder.startswith("agent_"):
+        project_folder = f"agent_{project_folder}"
+    agent_name = "".join(part.capitalize() for part in project_folder.split("_"))
+    summary = _summarize_response_text(response_text)
+    return AgentPlan(
+        agent_name=agent_name,
+        project_folder=project_folder,
+        goal=normalized_request,
+        summary=summary,
+        required_llm_providers=[item.name for item in catalog.llm_providers],
+        required_skills=[item.name for item in catalog.skills],
+        required_tools=[item.name for item in catalog.tools],
+        required_mcp=[item.name for item in catalog.mcp],
+        required_ui=[item.name for item in catalog.ui],
+        folder_blueprint=[
+            "agent/",
+            "LLMProviders/",
+            "TOOLS/",
+            "SKILLS/",
+            "MCP/",
+            "UI/",
+        ],
+        implementation_steps=[
+            "Read user request from UI.",
+            "Invoke provider base with tools + MCP + skills loaded.",
+            "Return final response and persist minimal runtime metadata.",
+        ],
+        warnings=[],
+        raw_response=response_text,
+    )
 
 
-class _GenerationProcessLogger:
-    """Appends timestamped generation events to a file inside the child project."""
+def _slugify(value: str) -> str:
+    lowered = value.lower().strip()
+    lowered = re.sub(r"[^a-z0-9]+", "_", lowered)
+    lowered = re.sub(r"_+", "_", lowered)
+    return lowered.strip("_")
 
-    def __init__(self, log_file: Path, *, enabled: bool = True) -> None:
-        self.log_file = log_file if enabled else None
-        self._enabled = enabled
-        self._active = False
-        self._buffer: list[tuple[str, str]] = []
 
-    def activate(self) -> None:
-        if not self._enabled:
-            return
-        if self._active:
-            return
-        assert self.log_file is not None
-        self.log_file.parent.mkdir(parents=True, exist_ok=True)
-        with self.log_file.open("a", encoding="utf-8") as handle:
-            for timestamp, message in self._buffer:
-                handle.write(f"{timestamp} | {message}\n")
-        self._buffer = []
-        self._active = True
+def _summarize_response_text(response_text: str, *, max_chars: int = 600) -> str:
+    normalized = response_text.strip()
+    if not normalized:
+        return "No response produced."
 
-    def log(self, message: str) -> None:
-        if not self._enabled:
-            return
-        timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        if not self._active:
-            self._buffer.append((timestamp, message))
-            return
-        assert self.log_file is not None
-        with self.log_file.open("a", encoding="utf-8") as handle:
-            handle.write(f"{timestamp} | {message}\n")
+    compact = re.sub(r"\s+", " ", normalized)
+    if len(compact) <= max_chars:
+        return compact
+    return compact[: max_chars - 1].rstrip() + "..."

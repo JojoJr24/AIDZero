@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-from agent.openai_compatible_provider import (
+from LLMProviders.openai_compatible_provider import (
     OpenAICompatibleProvider,
     OpenAICompatibleProviderError,
     extract_text_from_chat_completion,

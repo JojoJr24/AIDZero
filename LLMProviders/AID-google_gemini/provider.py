@@ -5,13 +5,18 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Iterable, Iterator
 from typing import Any
 
-from agent.provider_base import ProviderError
+from LLMProviders.provider_base import (
+    ProviderError,
+    normalize_tool_result_content,
+    parse_json_object,
+)
 
 DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 DATA_URL_RE = re.compile(r"^data:(?P<mime>[^;]+);base64,(?P<data>.+)$", re.IGNORECASE)
@@ -37,6 +42,9 @@ class GeminiProvider:
         self.api_key = resolved_api_key
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        self._stream_lock = threading.Lock()
+        self._active_stream_response: Any | None = None
+        self._stop_requested = False
 
     def list_models(self, *, page_size: int = 100) -> list[dict[str, Any]]:
         models: list[dict[str, Any]] = []
@@ -68,18 +76,16 @@ class GeminiProvider:
         system_instruction: Any = None,
         generation_config: dict[str, Any] | None = None,
         safety_settings: list[dict[str, Any]] | None = None,
-        tools: list[dict[str, Any]] | None = None,
-        tool_config: dict[str, Any] | None = None,
         cached_content: str | None = None,
+        **kwargs: Any,
     ) -> dict[str, Any]:
         payload = self._build_generate_payload(
             contents=contents,
             system_instruction=system_instruction,
             generation_config=generation_config,
             safety_settings=safety_settings,
-            tools=tools,
-            tool_config=tool_config,
             cached_content=cached_content,
+            extra=kwargs,
         )
         endpoint = f"/{self._normalize_model_name(model)}:generateContent"
         return self._request_json("POST", endpoint, payload=payload)
@@ -92,18 +98,16 @@ class GeminiProvider:
         system_instruction: Any = None,
         generation_config: dict[str, Any] | None = None,
         safety_settings: list[dict[str, Any]] | None = None,
-        tools: list[dict[str, Any]] | None = None,
-        tool_config: dict[str, Any] | None = None,
         cached_content: str | None = None,
+        **kwargs: Any,
     ) -> Iterator[dict[str, Any]]:
         payload = self._build_generate_payload(
             contents=contents,
             system_instruction=system_instruction,
             generation_config=generation_config,
             safety_settings=safety_settings,
-            tools=tools,
-            tool_config=tool_config,
             cached_content=cached_content,
+            extra=kwargs,
         )
         endpoint = f"/{self._normalize_model_name(model)}:streamGenerateContent"
         url = self._build_url(endpoint, query={"alt": "sse"})
@@ -120,19 +124,34 @@ class GeminiProvider:
 
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                for raw_payload in _iter_sse_payloads(response):
-                    if raw_payload == "[DONE]":
-                        break
-                    try:
-                        yield json.loads(raw_payload)
-                    except json.JSONDecodeError as error:
-                        raise GeminiProviderError(
-                            f"Invalid JSON payload in Gemini stream: {raw_payload[:300]}"
-                        ) from error
+                self._register_active_stream(response)
+                try:
+                    for raw_payload in _iter_sse_payloads(response):
+                        if self._is_stop_requested():
+                            break
+                        if raw_payload == "[DONE]":
+                            break
+                        try:
+                            yield json.loads(raw_payload)
+                        except json.JSONDecodeError as error:
+                            raise GeminiProviderError(
+                                f"Invalid JSON payload in Gemini stream: {raw_payload[:300]}"
+                            ) from error
+                finally:
+                    self._clear_active_stream(response)
         except urllib.error.HTTPError as error:
+            if self._consume_stop_requested():
+                return
             raise GeminiProviderError(self._format_http_error(error)) from error
         except urllib.error.URLError as error:
+            if self._consume_stop_requested():
+                return
             raise GeminiProviderError(f"Gemini stream connection error: {error.reason}") from error
+        except Exception:
+            if self._consume_stop_requested():
+                return
+            raise
+        self._consume_stop_requested()
 
     def generate_text(
         self,
@@ -141,12 +160,14 @@ class GeminiProvider:
         *,
         system_instruction: Any = None,
         generation_config: dict[str, Any] | None = None,
+        **kwargs: Any,
     ) -> str:
         response = self.generate_content(
             model=model,
             contents=prompt,
             system_instruction=system_instruction,
             generation_config=generation_config,
+            **kwargs,
         )
         return extract_text_from_response(response)
 
@@ -157,12 +178,14 @@ class GeminiProvider:
         *,
         system_instruction: Any = None,
         generation_config: dict[str, Any] | None = None,
+        **kwargs: Any,
     ) -> Iterator[str]:
         for event in self.stream_generate_content(
             model=model,
             contents=prompt,
             system_instruction=system_instruction,
             generation_config=generation_config,
+            **kwargs,
         ):
             for text_chunk in _extract_text_parts(event):
                 yield text_chunk
@@ -175,8 +198,7 @@ class GeminiProvider:
         system_instruction: Any = None,
         generation_config: dict[str, Any] | None = None,
         safety_settings: list[dict[str, Any]] | None = None,
-        tools: list[dict[str, Any]] | None = None,
-        tool_config: dict[str, Any] | None = None,
+        **kwargs: Any,
     ) -> dict[str, Any]:
         inferred_system_instruction, gemini_contents = _split_system_and_contents(messages)
         merged_system_instruction = _merge_system_instruction(
@@ -188,8 +210,7 @@ class GeminiProvider:
             system_instruction=merged_system_instruction,
             generation_config=generation_config,
             safety_settings=safety_settings,
-            tools=tools,
-            tool_config=tool_config,
+            **kwargs,
         )
 
     def chat_text(
@@ -199,12 +220,14 @@ class GeminiProvider:
         *,
         system_instruction: Any = None,
         generation_config: dict[str, Any] | None = None,
+        **kwargs: Any,
     ) -> str:
         response = self.chat(
             model=model,
             messages=messages,
             system_instruction=system_instruction,
             generation_config=generation_config,
+            **kwargs,
         )
         return extract_text_from_response(response)
 
@@ -216,8 +239,7 @@ class GeminiProvider:
         system_instruction: Any = None,
         generation_config: dict[str, Any] | None = None,
         safety_settings: list[dict[str, Any]] | None = None,
-        tools: list[dict[str, Any]] | None = None,
-        tool_config: dict[str, Any] | None = None,
+        **kwargs: Any,
     ) -> Iterator[dict[str, Any]]:
         inferred_system_instruction, gemini_contents = _split_system_and_contents(messages)
         merged_system_instruction = _merge_system_instruction(
@@ -229,9 +251,18 @@ class GeminiProvider:
             system_instruction=merged_system_instruction,
             generation_config=generation_config,
             safety_settings=safety_settings,
-            tools=tools,
-            tool_config=tool_config,
+            **kwargs,
         )
+
+    def stop_stream(self) -> None:
+        with self._stream_lock:
+            self._stop_requested = True
+            response = self._active_stream_response
+        if response is None:
+            return
+        close = getattr(response, "close", None)
+        if callable(close):
+            close()
 
     def stream_chat_text(
         self,
@@ -240,12 +271,14 @@ class GeminiProvider:
         *,
         system_instruction: Any = None,
         generation_config: dict[str, Any] | None = None,
+        **kwargs: Any,
     ) -> Iterator[str]:
         for event in self.stream_chat(
             model=model,
             messages=messages,
             system_instruction=system_instruction,
             generation_config=generation_config,
+            **kwargs,
         ):
             for text_chunk in _extract_text_parts(event):
                 yield text_chunk
@@ -256,14 +289,11 @@ class GeminiProvider:
         contents: Any,
         *,
         system_instruction: Any = None,
-        tools: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {"contents": _normalize_contents(contents)}
         normalized_system = _normalize_system_instruction(system_instruction)
         if normalized_system:
             payload["systemInstruction"] = normalized_system
-        if tools:
-            payload["tools"] = tools
         endpoint = f"/{self._normalize_model_name(model)}:countTokens"
         return self._request_json("POST", endpoint, payload=payload)
 
@@ -310,6 +340,66 @@ class GeminiProvider:
         endpoint = f"/{normalized_model}:batchEmbedContents"
         return self._request_json("POST", endpoint, payload=payload)
 
+    def supports_tool_calling(self) -> bool:
+        return True
+
+    def extract_tool_calls(self, response: dict[str, Any]) -> list[dict[str, Any]]:
+        tool_calls: list[dict[str, Any]] = []
+        candidates = response.get("candidates")
+        if not isinstance(candidates, list):
+            return tool_calls
+
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            content = candidate.get("content")
+            if not isinstance(content, dict):
+                continue
+            parts = content.get("parts")
+            if not isinstance(parts, list):
+                continue
+            for index, part in enumerate(parts, start=1):
+                if not isinstance(part, dict):
+                    continue
+                function_call = part.get("function_call")
+                if not isinstance(function_call, dict):
+                    continue
+                name = function_call.get("name")
+                if not isinstance(name, str) or not name.strip():
+                    continue
+                args = parse_json_object(function_call.get("args"))
+                tool_calls.append(
+                    {
+                        "id": f"gemini_tool_call_{index}",
+                        "type": "function",
+                        "function": {
+                            "name": name.strip(),
+                            "arguments": json.dumps(args, ensure_ascii=False),
+                        },
+                    }
+                )
+        return tool_calls
+
+    def build_tool_result_message(
+        self,
+        *,
+        tool_call_id: str,
+        name: str,
+        result: Any,
+    ) -> dict[str, Any]:
+        normalized_name = name.strip()
+        if not normalized_name:
+            raise ValueError("name cannot be empty.")
+        normalized_id = tool_call_id.strip()
+        if not normalized_id:
+            raise ValueError("tool_call_id cannot be empty.")
+        return {
+            "role": "tool",
+            "tool_call_id": normalized_id,
+            "name": normalized_name,
+            "content": normalize_tool_result_content(result),
+        }
+
     def _build_generate_payload(
         self,
         *,
@@ -317,9 +407,8 @@ class GeminiProvider:
         system_instruction: Any = None,
         generation_config: dict[str, Any] | None = None,
         safety_settings: list[dict[str, Any]] | None = None,
-        tools: list[dict[str, Any]] | None = None,
-        tool_config: dict[str, Any] | None = None,
         cached_content: str | None = None,
+        extra: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {"contents": _normalize_contents(contents)}
         normalized_system = _normalize_system_instruction(system_instruction)
@@ -329,12 +418,12 @@ class GeminiProvider:
             payload["generationConfig"] = generation_config
         if safety_settings:
             payload["safetySettings"] = safety_settings
-        if tools:
-            payload["tools"] = tools
-        if tool_config:
-            payload["toolConfig"] = tool_config
         if cached_content:
             payload["cachedContent"] = cached_content
+        if extra:
+            for key, value in extra.items():
+                if value is not None:
+                    payload[key] = value
         return payload
 
     def _request_json(
@@ -402,6 +491,26 @@ class GeminiProvider:
             pass
         return f"Gemini API HTTP {error.code}: {message}"
 
+    def _register_active_stream(self, response: Any) -> None:
+        with self._stream_lock:
+            self._active_stream_response = response
+            self._stop_requested = False
+
+    def _clear_active_stream(self, response: Any) -> None:
+        with self._stream_lock:
+            if self._active_stream_response is response:
+                self._active_stream_response = None
+
+    def _is_stop_requested(self) -> bool:
+        with self._stream_lock:
+            return self._stop_requested
+
+    def _consume_stop_requested(self) -> bool:
+        with self._stream_lock:
+            requested = self._stop_requested
+            self._stop_requested = False
+            return requested
+
 
 def extract_text_from_response(response: dict[str, Any]) -> str:
     text = "".join(_extract_text_parts(response)).strip()
@@ -440,11 +549,49 @@ def _split_system_and_contents(
 
     for message in messages:
         role = str(message.get("role", "user")).lower().strip()
-        content = message.get("content", "")
-        parts = _normalize_parts(content)
         if role == "system":
+            content = message.get("content", "")
+            parts = _normalize_parts(content)
             system_parts.extend(parts)
             continue
+
+        if role == "tool":
+            tool_name = message.get("name")
+            if not isinstance(tool_name, str) or not tool_name.strip():
+                tool_name = "tool"
+            raw_content = message.get("content")
+            response_payload = parse_json_object(raw_content)
+            parts = [
+                {
+                    "function_response": {
+                        "name": tool_name.strip(),
+                        "response": {"content": response_payload},
+                    }
+                }
+            ]
+            contents.append({"role": "user", "parts": parts})
+            continue
+
+        parts = _normalize_parts(message.get("content", ""))
+        tool_calls = message.get("tool_calls")
+        if role in {"assistant", "model"} and isinstance(tool_calls, list):
+            for raw_call in tool_calls:
+                if not isinstance(raw_call, dict):
+                    continue
+                function_payload = raw_call.get("function")
+                if not isinstance(function_payload, dict):
+                    continue
+                call_name = function_payload.get("name")
+                if not isinstance(call_name, str) or not call_name.strip():
+                    continue
+                parts.append(
+                    {
+                        "function_call": {
+                            "name": call_name.strip(),
+                            "args": parse_json_object(function_payload.get("arguments")),
+                        }
+                    }
+                )
 
         gemini_role = "model" if role in {"assistant", "model"} else "user"
         contents.append({"role": gemini_role, "parts": parts})
