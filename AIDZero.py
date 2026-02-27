@@ -58,7 +58,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--yes",
         action="store_true",
-        help="Skip scaffolding confirmation prompt.",
+        help="Skip interactive plan review and scaffold immediately.",
     )
     parser.add_argument(
         "--ui-option",

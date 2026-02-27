@@ -30,6 +30,23 @@ _MCP_SHARED_FILES = (
 
 _UI_SHARED_FILES = (Path("UI/AGENTS.md"),)
 
+_DEFAULT_FOLDER_BLUEPRINT = [
+    "agent/",
+    "LLMProviders/",
+    "TOOLS/",
+    "SKILLS/",
+    "MCP/",
+    "UI/",
+]
+
+_DEFAULT_IMPLEMENTATION_STEPS = [
+    "Step 1: define the agent plan.",
+    "Step 2: copy selected parent scaffolding into the child workspace.",
+    "Step 3: generate fresh child code with root main.py and agent/* runtime logic.",
+]
+
+_MISSING = object()
+
 
 @dataclass(frozen=True)
 class _SelectedComponents:
@@ -57,13 +74,14 @@ class AgentCreator:
         user_request: str,
         ui_name: str | None = None,
         invocation_tracer: InvocationTracer | None = None,
+        catalog: ComponentCatalog | None = None,
     ) -> str:
-        catalog = self.scan_components()
+        effective_catalog = catalog or self.scan_components()
         runtime = ProviderBaseRuntime(
             provider=self.provider,
             model=self.model,
             repo_root=self.repo_root,
-            catalog=catalog,
+            catalog=effective_catalog,
         )
         return runtime.ask(prompt=user_request, ui_name=ui_name, invocation_tracer=invocation_tracer)
 
@@ -75,8 +93,56 @@ class AgentCreator:
         invocation_tracer: InvocationTracer | None = None,
     ) -> PlanningResult:
         catalog = self.scan_components()
-        response_text = self.respond_to_prompt(
+        planning_prompt = _build_initial_plan_prompt(user_request=user_request, catalog=catalog)
+        return self._request_plan(
             user_request=user_request,
+            planning_prompt=planning_prompt,
+            catalog=catalog,
+            ui_name=ui_name,
+            invocation_tracer=invocation_tracer,
+        )
+
+    def revise_requirements(
+        self,
+        *,
+        user_request: str,
+        current_plan: AgentPlan,
+        plan_change_request: str,
+        ui_name: str | None = None,
+        invocation_tracer: InvocationTracer | None = None,
+    ) -> PlanningResult:
+        normalized_change_request = plan_change_request.strip()
+        if not normalized_change_request:
+            raise ValueError("plan_change_request cannot be empty.")
+        catalog = self.scan_components()
+        planning_prompt = _build_plan_revision_prompt(
+            user_request=user_request,
+            current_plan=current_plan,
+            plan_change_request=normalized_change_request,
+            catalog=catalog,
+        )
+        return self._request_plan(
+            user_request=user_request,
+            planning_prompt=planning_prompt,
+            catalog=catalog,
+            ui_name=ui_name,
+            invocation_tracer=invocation_tracer,
+            base_plan=current_plan,
+        )
+
+    def _request_plan(
+        self,
+        *,
+        user_request: str,
+        planning_prompt: str,
+        catalog: ComponentCatalog,
+        ui_name: str | None,
+        invocation_tracer: InvocationTracer | None,
+        base_plan: AgentPlan | None = None,
+    ) -> PlanningResult:
+        response_text = self.respond_to_prompt(
+            user_request=planning_prompt,
+            catalog=catalog,
             ui_name=ui_name,
             invocation_tracer=invocation_tracer,
         )
@@ -84,6 +150,7 @@ class AgentCreator:
             user_request=user_request,
             response_text=response_text,
             catalog=catalog,
+            base_plan=base_plan,
         )
         return PlanningResult(plan=plan, catalog=catalog, response_text=response_text)
 
@@ -266,6 +333,93 @@ class AgentCreator:
             ),
             "template_fallback",
         )
+
+
+def _plan_prompt_context(*, catalog: ComponentCatalog) -> dict[str, list[str]]:
+    return {
+        "required_llm_providers": [item.name for item in catalog.llm_providers],
+        "required_skills": [item.name for item in catalog.skills],
+        "required_tools": [item.name for item in catalog.tools],
+        "required_mcp": [item.name for item in catalog.mcp],
+        "required_ui": [item.name for item in catalog.ui],
+    }
+
+
+def _build_initial_plan_prompt(*, user_request: str, catalog: ComponentCatalog) -> str:
+    prompt_payload = {
+        "user_request": user_request.strip(),
+        "available_components": _plan_prompt_context(catalog=catalog),
+        "default_folder_blueprint": list(_DEFAULT_FOLDER_BLUEPRINT),
+        "default_implementation_steps": list(_DEFAULT_IMPLEMENTATION_STEPS),
+    }
+    return (
+        "Create an implementation-oriented child-agent plan.\n"
+        "Return ONLY one JSON object with this exact schema:\n"
+        "{"
+        '"agent_name":"...",'
+        '"project_folder":"...",'
+        '"goal":"...",'
+        '"summary":"...",'
+        '"required_llm_providers":["..."],'
+        '"required_skills":["..."],'
+        '"required_tools":["..."],'
+        '"required_mcp":["..."],'
+        '"required_ui":["..."],'
+        '"folder_blueprint":["..."],'
+        '"implementation_steps":["..."],'
+        '"warnings":["..."]'
+        "}\n"
+        "Rules:\n"
+        "- Use only listed component names from available_components.\n"
+        "- Keep project_folder lowercase snake_case and prefixed with `agent_`.\n"
+        "- Keep implementation_steps focused on plan, scaffold copy, and child code generation.\n"
+        "- Keep summary concise and actionable.\n"
+        "- Output raw JSON only (no markdown).\n"
+        "Planning context:\n"
+        + json.dumps(prompt_payload, indent=2, ensure_ascii=False)
+    )
+
+
+def _build_plan_revision_prompt(
+    *,
+    user_request: str,
+    current_plan: AgentPlan,
+    plan_change_request: str,
+    catalog: ComponentCatalog,
+) -> str:
+    prompt_payload = {
+        "user_request": user_request.strip(),
+        "current_plan": current_plan.to_dict(),
+        "plan_change_request": plan_change_request.strip(),
+        "available_components": _plan_prompt_context(catalog=catalog),
+        "default_folder_blueprint": list(_DEFAULT_FOLDER_BLUEPRINT),
+        "default_implementation_steps": list(_DEFAULT_IMPLEMENTATION_STEPS),
+    }
+    return (
+        "Revise the current child-agent plan using the requested plan changes.\n"
+        "Return ONLY one JSON object with the full plan schema:\n"
+        "{"
+        '"agent_name":"...",'
+        '"project_folder":"...",'
+        '"goal":"...",'
+        '"summary":"...",'
+        '"required_llm_providers":["..."],'
+        '"required_skills":["..."],'
+        '"required_tools":["..."],'
+        '"required_mcp":["..."],'
+        '"required_ui":["..."],'
+        '"folder_blueprint":["..."],'
+        '"implementation_steps":["..."],'
+        '"warnings":["..."]'
+        "}\n"
+        "Rules:\n"
+        "- Apply the requested change while preserving compatible parts from current_plan.\n"
+        "- Use only listed component names from available_components.\n"
+        "- Keep project_folder lowercase snake_case and prefixed with `agent_`.\n"
+        "- Output raw JSON only (no markdown).\n"
+        "Revision context:\n"
+        + json.dumps(prompt_payload, indent=2, ensure_ascii=False)
+    )
 
 
 def _prepare_destination(*, destination: Path, overwrite: bool) -> None:
@@ -774,39 +928,198 @@ def _build_plan_from_response(
     user_request: str,
     response_text: str,
     catalog: ComponentCatalog,
+    base_plan: AgentPlan | None = None,
 ) -> AgentPlan:
+    seed_plan = base_plan or _default_plan(
+        user_request=user_request,
+        response_text=response_text,
+        catalog=catalog,
+    )
+    payload = _extract_json_object(response_text)
+    if payload is None:
+        summary = _summarize_response_text(response_text)
+        return AgentPlan(
+            agent_name=seed_plan.agent_name,
+            project_folder=seed_plan.project_folder,
+            goal=seed_plan.goal,
+            summary=summary,
+            required_llm_providers=list(seed_plan.required_llm_providers),
+            required_skills=list(seed_plan.required_skills),
+            required_tools=list(seed_plan.required_tools),
+            required_mcp=list(seed_plan.required_mcp),
+            required_ui=list(seed_plan.required_ui),
+            folder_blueprint=list(seed_plan.folder_blueprint),
+            implementation_steps=list(seed_plan.implementation_steps),
+            warnings=list(seed_plan.warnings),
+            raw_response=response_text,
+        )
+
     normalized_request = user_request.strip()
-    project_folder = _slugify(normalized_request)[:48] or "agent_project"
-    if not project_folder.startswith("agent_"):
-        project_folder = f"agent_{project_folder}"
-    agent_name = "".join(part.capitalize() for part in project_folder.split("_"))
-    summary = _summarize_response_text(response_text)
+    default_goal = seed_plan.goal.strip() or normalized_request or "Build a child agent project."
+    goal = _as_non_empty_string(payload.get("goal", _MISSING)) or default_goal
+
+    project_folder_input = (
+        _as_non_empty_string(payload.get("project_folder", _MISSING)) or seed_plan.project_folder
+    )
+    project_folder = _normalize_project_folder(project_folder_input)
+
+    agent_name = (
+        _as_non_empty_string(payload.get("agent_name", _MISSING))
+        or seed_plan.agent_name.strip()
+        or _derive_agent_name(project_folder)
+    )
+    summary = _as_non_empty_string(payload.get("summary", _MISSING)) or _summarize_response_text(response_text)
+
+    required_llm_providers = _normalize_required_component_names(
+        payload.get("required_llm_providers", _MISSING),
+        available=catalog.llm_providers,
+        fallback=seed_plan.required_llm_providers,
+    )
+    required_skills = _normalize_required_component_names(
+        payload.get("required_skills", _MISSING),
+        available=catalog.skills,
+        fallback=seed_plan.required_skills,
+    )
+    required_tools = _normalize_required_component_names(
+        payload.get("required_tools", _MISSING),
+        available=catalog.tools,
+        fallback=seed_plan.required_tools,
+    )
+    required_mcp = _normalize_required_component_names(
+        payload.get("required_mcp", _MISSING),
+        available=catalog.mcp,
+        fallback=seed_plan.required_mcp,
+    )
+    required_ui = _normalize_required_component_names(
+        payload.get("required_ui", _MISSING),
+        available=catalog.ui,
+        fallback=seed_plan.required_ui,
+    )
+
+    folder_blueprint = _normalize_string_list(payload.get("folder_blueprint", _MISSING))
+    if not folder_blueprint:
+        folder_blueprint = (
+            list(seed_plan.folder_blueprint) if seed_plan.folder_blueprint else list(_DEFAULT_FOLDER_BLUEPRINT)
+        )
+
+    implementation_steps = _normalize_string_list(payload.get("implementation_steps", _MISSING))
+    if len(implementation_steps) < 3:
+        implementation_steps = (
+            list(seed_plan.implementation_steps)
+            if len(seed_plan.implementation_steps) >= 3
+            else list(_DEFAULT_IMPLEMENTATION_STEPS)
+        )
+
+    warnings = _normalize_string_list(payload.get("warnings", _MISSING))
+    if not warnings and seed_plan.warnings:
+        warnings = list(seed_plan.warnings)
+
     return AgentPlan(
         agent_name=agent_name,
         project_folder=project_folder,
-        goal=normalized_request,
+        goal=goal,
         summary=summary,
+        required_llm_providers=required_llm_providers,
+        required_skills=required_skills,
+        required_tools=required_tools,
+        required_mcp=required_mcp,
+        required_ui=required_ui,
+        folder_blueprint=folder_blueprint,
+        implementation_steps=implementation_steps,
+        warnings=warnings,
+        raw_response=response_text,
+    )
+
+
+def _default_plan(
+    *,
+    user_request: str,
+    response_text: str,
+    catalog: ComponentCatalog,
+) -> AgentPlan:
+    normalized_request = user_request.strip()
+    project_folder = _normalize_project_folder(normalized_request)
+    goal = normalized_request or "Build a child agent project."
+    return AgentPlan(
+        agent_name=_derive_agent_name(project_folder),
+        project_folder=project_folder,
+        goal=goal,
+        summary=_summarize_response_text(response_text),
         required_llm_providers=[item.name for item in catalog.llm_providers],
         required_skills=[item.name for item in catalog.skills],
         required_tools=[item.name for item in catalog.tools],
         required_mcp=[item.name for item in catalog.mcp],
         required_ui=[item.name for item in catalog.ui],
-        folder_blueprint=[
-            "agent/",
-            "LLMProviders/",
-            "TOOLS/",
-            "SKILLS/",
-            "MCP/",
-            "UI/",
-        ],
-        implementation_steps=[
-            "Step 1: define the agent plan.",
-            "Step 2: copy selected parent scaffolding into the child workspace.",
-            "Step 3: generate fresh child code with root main.py and agent/* runtime logic.",
-        ],
+        folder_blueprint=list(_DEFAULT_FOLDER_BLUEPRINT),
+        implementation_steps=list(_DEFAULT_IMPLEMENTATION_STEPS),
         warnings=[],
         raw_response=response_text,
     )
+
+
+def _normalize_required_component_names(
+    raw_value: Any,
+    *,
+    available: list[ComponentItem],
+    fallback: list[str],
+) -> list[str]:
+    if raw_value is _MISSING:
+        return list(fallback)
+    requested_names = _normalize_string_list(raw_value)
+    if not requested_names:
+        return []
+    if not available:
+        return []
+
+    exact_map = {item.name: item.name for item in available}
+    alias_map = {_component_alias(item.name): item.name for item in available}
+    selected: list[str] = []
+    seen: set[str] = set()
+    for raw_name in requested_names:
+        match = exact_map.get(raw_name)
+        if match is None:
+            match = alias_map.get(_component_alias(raw_name))
+        if match is None or match in seen:
+            continue
+        selected.append(match)
+        seen.add(match)
+    return selected
+
+
+def _normalize_string_list(raw_value: Any) -> list[str]:
+    if raw_value is _MISSING or not isinstance(raw_value, list):
+        return []
+    items: list[str] = []
+    seen: set[str] = set()
+    for item in raw_value:
+        if not isinstance(item, str):
+            continue
+        value = item.strip()
+        if not value or value in seen:
+            continue
+        items.append(value)
+        seen.add(value)
+    return items
+
+
+def _as_non_empty_string(raw_value: Any) -> str:
+    if raw_value is _MISSING or not isinstance(raw_value, str):
+        return ""
+    return raw_value.strip()
+
+
+def _normalize_project_folder(raw_value: str) -> str:
+    project_folder = _slugify(raw_value)[:48] or "agent_project"
+    if not project_folder.startswith("agent_"):
+        project_folder = f"agent_{project_folder}"
+    return project_folder
+
+
+def _derive_agent_name(project_folder: str) -> str:
+    parts = [part for part in project_folder.split("_") if part]
+    if not parts:
+        return "AgentProject"
+    return "".join(part.capitalize() for part in parts)
 
 
 def _slugify(value: str) -> str:

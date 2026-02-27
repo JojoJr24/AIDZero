@@ -18,9 +18,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from agent.provider_registry import ProviderRegistry
-from agent.prompt_history import PromptHistoryStore
 from agent.models import AgentPlan
+from agent.prompt_history import PromptHistoryStore
+from agent.provider_registry import ProviderRegistry
 from agent.service import AgentCreator
 from agent.ui_display import to_ui_label, to_ui_model_label
 
@@ -65,7 +65,7 @@ def _model_candidates(provider_registry: ProviderRegistry, provider_name: str) -
     except Exception as error:  # noqa: BLE001
         return [default_model], str(error)
 
-    unique_models = []
+    unique_models: list[str] = []
     for model_name in listed_models:
         if model_name not in unique_models:
             unique_models.append(model_name)
@@ -170,14 +170,12 @@ def _build_scaffold_payload(scaffold_result: Any) -> dict[str, Any]:
     }
 
 
-def _run_agent_request(
+def _run_initial_plan_request(
     *,
     repo_root: Path,
     provider_name: str,
     model: str,
     user_request: str,
-    dry_run: bool,
-    overwrite: bool,
 ) -> dict[str, Any]:
     registry = ProviderRegistry(repo_root)
     prompt_history = PromptHistoryStore(repo_root)
@@ -194,9 +192,8 @@ def _run_agent_request(
         ui_name="web",
         invocation_tracer=lambda payload: llm_invocations.append(payload),
     )
-
-    payload: dict[str, Any] = {
-        "mode": "dry_run" if dry_run else "scaffold",
+    return {
+        "mode": "plan",
         "provider": provider_name,
         "model": resolved_model,
         "request": user_request,
@@ -204,20 +201,51 @@ def _run_agent_request(
         "prompt_history": prompt_history_items,
         "llm_invocations": llm_invocations,
     }
-    if dry_run:
-        return payload
 
-    scaffold_result = creator.create_agent_project_from_plan(
+
+def _run_plan_revision_request(
+    *,
+    repo_root: Path,
+    provider_name: str,
+    model: str,
+    user_request: str,
+    current_plan_payload: Any,
+    plan_change_request: str,
+) -> dict[str, Any]:
+    registry = ProviderRegistry(repo_root)
+    prompt_history = PromptHistoryStore(repo_root)
+    if not registry.has(provider_name):
+        raise ValueError(f"Unknown provider '{provider_name}'.")
+
+    normalized_change_request = plan_change_request.strip()
+    if not normalized_change_request:
+        raise ValueError("Field 'plan_change_request' is required.")
+
+    resolved_model = model.strip() or registry.default_model(provider_name)
+    current_plan = _plan_from_payload(current_plan_payload)
+    provider = registry.create(provider_name)
+    creator = AgentCreator(provider=provider, model=resolved_model, repo_root=repo_root)
+    llm_invocations: list[dict[str, Any]] = []
+    planning_result = creator.revise_requirements(
         user_request=user_request,
-        plan=planning_result.plan,
-        catalog=planning_result.catalog,
-        overwrite=overwrite,
+        current_plan=current_plan,
+        plan_change_request=normalized_change_request,
+        ui_name="web",
+        invocation_tracer=lambda payload: llm_invocations.append(payload),
     )
-    payload["scaffold"] = _build_scaffold_payload(scaffold_result)
-    return payload
+
+    return {
+        "mode": "plan_revision",
+        "provider": provider_name,
+        "model": resolved_model,
+        "request": user_request,
+        "plan": planning_result.plan.to_dict(),
+        "prompt_history": prompt_history.list_prompts(),
+        "llm_invocations": llm_invocations,
+    }
 
 
-def _run_scaffold_from_dry_run(
+def _run_scaffold_from_plan(
     *,
     repo_root: Path,
     provider_name: str,
@@ -244,7 +272,7 @@ def _run_scaffold_from_dry_run(
         overwrite=overwrite,
     )
     return {
-        "mode": "scaffold_from_dry_run",
+        "mode": "scaffold_from_plan",
         "provider": provider_name,
         "model": resolved_model,
         "request": user_request,
@@ -256,10 +284,10 @@ def _run_scaffold_from_dry_run(
 
 def _render_index_html() -> str:
     return """<!doctype html>
-<html lang="en">
+<html lang=\"en\">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta charset=\"utf-8\" />
+  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
   <title>AIDZero Web UI</title>
   <style>
     :root {
@@ -280,7 +308,7 @@ def _render_index_html() -> str:
       margin: 0;
       min-height: 100vh;
       color: var(--text);
-      font-family: "Avenir Next", "Trebuchet MS", "Segoe UI", sans-serif;
+      font-family: \"Avenir Next\", \"Trebuchet MS\", \"Segoe UI\", sans-serif;
       background:
         radial-gradient(circle at 15% 15%, rgba(251, 113, 133, 0.18), transparent 35%),
         radial-gradient(circle at 85% 0%, rgba(56, 189, 248, 0.18), transparent 35%),
@@ -330,7 +358,7 @@ def _render_index_html() -> str:
       font-size: 0.98rem;
     }
     textarea {
-      min-height: 120px;
+      min-height: 100px;
       resize: vertical;
       line-height: 1.45;
     }
@@ -381,7 +409,7 @@ def _render_index_html() -> str:
       background: rgba(2, 6, 23, 0.6);
       border: 1px solid rgba(255, 255, 255, 0.18);
       overflow: auto;
-      font-family: "Iosevka", "Consolas", monospace;
+      font-family: \"Iosevka\", \"Consolas\", monospace;
       font-size: 0.86rem;
       line-height: 1.45;
       white-space: pre-wrap;
@@ -404,46 +432,56 @@ def _render_index_html() -> str:
   </style>
 </head>
 <body>
-  <main class="layout">
-    <section class="card">
+  <main class=\"layout\">
+    <section class=\"card\">
       <h1>AIDZero Agent Creator</h1>
-      <p>Create an agent plan or scaffold a full project from a natural language request.</p>
+      <p>Build a plan, request changes, and scaffold only after the plan is approved.</p>
     </section>
 
-    <section class="card">
-      <div class="grid">
-        <div class="field">
-          <label for="provider">Provider</label>
-          <select id="provider"></select>
+    <section class=\"card\">
+      <div class=\"grid\">
+        <div class=\"field\">
+          <label for=\"provider\">Provider</label>
+          <select id=\"provider\"></select>
         </div>
-        <div class="field">
-          <label for="model">Model</label>
-          <select id="model"></select>
+        <div class=\"field\">
+          <label for=\"model\">Model</label>
+          <select id=\"model\"></select>
         </div>
-        <div class="field full">
-          <label for="request">Request</label>
-          <textarea id="request" placeholder="Build an agent for daily KPI reports..."></textarea>
+        <div class=\"field full\">
+          <label for=\"request\">Request</label>
+          <textarea id=\"request\" placeholder=\"Build an agent for daily KPI reports...\"></textarea>
         </div>
-        <div class="field full">
-          <label for="historyPrompt">Prompt History</label>
-          <select id="historyPrompt"></select>
+        <div class=\"field full\">
+          <label for=\"historyPrompt\">Prompt History</label>
+          <select id=\"historyPrompt\"></select>
+        </div>
+        <div class=\"field full\">
+          <label for=\"planChangeRequest\">Plan Change Request</label>
+          <textarea id=\"planChangeRequest\" placeholder=\"Ask for plan changes here before scaffolding...\"></textarea>
         </div>
       </div>
-      <div class="actions">
-        <label class="toggle"><input id="dryRun" type="checkbox" /> Dry run (plan only)</label>
-        <label class="toggle"><input id="overwrite" type="checkbox" /> Overwrite non-empty destination</label>
-        <button id="runBtn">Run</button>
-        <button id="useHistoryBtn" class="secondary" type="button">Use History Prompt</button>
-        <button id="runFromDryRunBtn" class="secondary" type="button" disabled>Scaffold Last Dry-Run</button>
-        <button id="refreshBtn" class="secondary" type="button">Refresh Models</button>
+      <div class=\"actions\">
+        <label class=\"toggle\"><input id=\"dryRun\" type=\"checkbox\" /> Dry run (plan only)</label>
+        <label class=\"toggle\"><input id=\"overwrite\" type=\"checkbox\" /> Overwrite non-empty destination</label>
+        <button id=\"generatePlanBtn\">Generate Plan</button>
+        <button id=\"revisePlanBtn\" class=\"secondary\" type=\"button\" disabled>Request Plan Changes</button>
+        <button id=\"scaffoldBtn\" class=\"secondary\" type=\"button\" disabled>Scaffold Approved Plan</button>
+        <button id=\"useHistoryBtn\" class=\"secondary\" type=\"button\">Use History Prompt</button>
+        <button id=\"refreshBtn\" class=\"secondary\" type=\"button\">Refresh Models</button>
       </div>
-      <p id="status">Loading options...</p>
-      <p class="note">Tip: Use dry-run first to review the plan before scaffolding files.</p>
+      <p id=\"status\">Loading options...</p>
+      <p class=\"note\">Step 1 is interactive: generate a plan, iterate revisions, then continue to step 2.</p>
     </section>
 
-    <section class="card">
-      <h2 style="margin:0 0 10px; font-size:1.05rem; color:var(--muted);">Result</h2>
-      <pre id="result">{}</pre>
+    <section class=\"card\">
+      <h2 style=\"margin:0 0 10px; font-size:1.05rem; color:var(--muted);\">Result</h2>
+      <pre id=\"result\">{}</pre>
+    </section>
+
+    <section class=\"card\">
+      <h2 style=\"margin:0 0 10px; font-size:1.05rem; color:var(--muted);\">LLM Invocations</h2>
+      <pre id=\"llmInvocations\">[]</pre>
     </section>
 
   </main>
@@ -452,16 +490,19 @@ def _render_index_html() -> str:
     const providerEl = document.getElementById("provider");
     const modelEl = document.getElementById("model");
     const requestEl = document.getElementById("request");
+    const planChangeRequestEl = document.getElementById("planChangeRequest");
     const historyPromptEl = document.getElementById("historyPrompt");
     const dryRunEl = document.getElementById("dryRun");
     const overwriteEl = document.getElementById("overwrite");
-    const runBtn = document.getElementById("runBtn");
+    const generatePlanBtn = document.getElementById("generatePlanBtn");
+    const revisePlanBtn = document.getElementById("revisePlanBtn");
+    const scaffoldBtn = document.getElementById("scaffoldBtn");
     const useHistoryBtn = document.getElementById("useHistoryBtn");
-    const runFromDryRunBtn = document.getElementById("runFromDryRunBtn");
     const refreshBtn = document.getElementById("refreshBtn");
     const statusEl = document.getElementById("status");
     const resultEl = document.getElementById("result");
-    let lastDryRunContext = null;
+    const llmInvocationsEl = document.getElementById("llmInvocations");
+    let currentPlanContext = null;
 
     function setStatus(message, cls = "") {
       statusEl.className = cls;
@@ -503,7 +544,7 @@ def _render_index_html() -> str:
         plan: compactPlan(payload.plan)
       };
 
-      if (payload.mode === "dry_run") {
+      if (payload.mode === "plan" || payload.mode === "plan_revision" || payload.mode === "dry_run") {
         return {
           ...base,
           llm_invocations_count: Array.isArray(payload.llm_invocations) ? payload.llm_invocations.length : 0,
@@ -511,7 +552,7 @@ def _render_index_html() -> str:
         };
       }
 
-      if (payload.mode === "scaffold" || payload.mode === "scaffold_from_dry_run") {
+      if (payload.mode === "scaffold" || payload.mode === "scaffold_from_dry_run" || payload.mode === "scaffold_from_plan") {
         return {
           ...base,
           scaffold: payload.scaffold || null,
@@ -524,6 +565,50 @@ def _render_index_html() -> str:
 
     function setResult(payload) {
       resultEl.textContent = JSON.stringify(formatResultForDisplay(payload), null, 2);
+    }
+
+    function setInvocations(payload) {
+      if (!llmInvocationsEl) return;
+      llmInvocationsEl.textContent = JSON.stringify(payload, null, 2);
+    }
+
+    function setCurrentPlanContext(payload) {
+      if (!payload || typeof payload !== "object" || !payload.plan) {
+        currentPlanContext = null;
+        updateActionButtons();
+        return;
+      }
+      currentPlanContext = {
+        provider: String(payload.provider || "").trim(),
+        model: String(payload.model || "").trim(),
+        request: String(payload.request || "").trim(),
+        plan: payload.plan
+      };
+      updateActionButtons();
+    }
+
+    function clearCurrentPlanContext() {
+      currentPlanContext = null;
+      updateActionButtons();
+    }
+
+    function updateActionButtons() {
+      const hasPlan = Boolean(currentPlanContext && currentPlanContext.plan);
+      revisePlanBtn.disabled = !hasPlan;
+      scaffoldBtn.disabled = !hasPlan || dryRunEl.checked;
+    }
+
+    function invalidatePlanIfInputsChanged() {
+      if (!currentPlanContext) return;
+      const request = requestEl.value.trim();
+      if (
+        providerEl.value !== currentPlanContext.provider ||
+        modelEl.value !== currentPlanContext.model ||
+        request !== currentPlanContext.request
+      ) {
+        clearCurrentPlanContext();
+        setStatus("Plan context changed. Generate a new plan first.", "warn");
+      }
     }
 
     function refillSelect(selectEl, items, selectedValue) {
@@ -585,6 +670,7 @@ def _render_index_html() -> str:
         throw new Error(payload.error || "Could not fetch models.");
       }
       refillSelect(modelEl, payload.models, payload.selected_model);
+      invalidatePlanIfInputsChanged();
       if (payload.model_error) {
         setStatus(`Models loaded with fallback: ${payload.model_error}`, "warn");
       } else {
@@ -592,55 +678,147 @@ def _render_index_html() -> str:
       }
     }
 
-    async function submitRun() {
+    async function submitPlan() {
       const request = requestEl.value.trim();
       if (!request) {
         setStatus("Request is required.", "error");
         return;
       }
-      runBtn.disabled = true;
-      setStatus("Running request...", "warn");
+
+      generatePlanBtn.disabled = true;
+      revisePlanBtn.disabled = true;
+      scaffoldBtn.disabled = true;
+      setStatus("Generating plan...", "warn");
       setInvocations({ info: "Waiting for LLM response..." });
       try {
-        const response = await fetch("/api/run", {
+        const response = await fetch("/api/plan", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             provider: providerEl.value,
             model: modelEl.value,
-            request,
-            dry_run: dryRunEl.checked,
-            overwrite: overwriteEl.checked
+            request
           })
         });
         const payload = await response.json();
         if (!response.ok) {
-          throw new Error(payload.error || "Request failed.");
+          throw new Error(payload.error || "Plan generation failed.");
         }
         setResult(payload);
         setInvocations(payload.llm_invocations || []);
         if (Array.isArray(payload.prompt_history)) {
           refillPromptHistory(payload.prompt_history);
         }
-        if (payload.mode === "dry_run") {
-          lastDryRunContext = {
-            provider: payload.provider,
-            model: payload.model,
-            request: payload.request || request,
-            plan: payload.plan
-          };
-          runFromDryRunBtn.disabled = false;
-          setStatus("Plan generated successfully.", "ok");
+        setCurrentPlanContext(payload);
+        if (dryRunEl.checked) {
+          setStatus("Plan generated. Dry-run is enabled, scaffolding is disabled.", "ok");
         } else {
-          lastDryRunContext = null;
-          runFromDryRunBtn.disabled = true;
-          setStatus("Project scaffolded successfully.", "ok");
+          setStatus("Plan generated. Request changes or scaffold when ready.", "ok");
         }
       } catch (error) {
         setStatus(String(error), "error");
         setInvocations({ error: String(error) });
       } finally {
-        runBtn.disabled = false;
+        generatePlanBtn.disabled = false;
+        updateActionButtons();
+      }
+    }
+
+    async function submitPlanRevision() {
+      if (!currentPlanContext || !currentPlanContext.plan) {
+        setStatus("Generate a plan before requesting changes.", "warn");
+        return;
+      }
+      const planChangeRequest = planChangeRequestEl.value.trim();
+      if (!planChangeRequest) {
+        setStatus("Plan change request is required.", "error");
+        return;
+      }
+
+      generatePlanBtn.disabled = true;
+      revisePlanBtn.disabled = true;
+      scaffoldBtn.disabled = true;
+      setStatus("Revising plan...", "warn");
+      setInvocations({ info: "Waiting for LLM plan revision..." });
+      try {
+        const response = await fetch("/api/plan/revise", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            provider: currentPlanContext.provider,
+            model: currentPlanContext.model,
+            request: currentPlanContext.request,
+            current_plan: currentPlanContext.plan,
+            plan_change_request: planChangeRequest
+          })
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.error || "Plan revision failed.");
+        }
+        setResult(payload);
+        setInvocations(payload.llm_invocations || []);
+        if (Array.isArray(payload.prompt_history)) {
+          refillPromptHistory(payload.prompt_history);
+        }
+        setCurrentPlanContext(payload);
+        if (dryRunEl.checked) {
+          setStatus("Plan revised. Dry-run is enabled, scaffolding is disabled.", "ok");
+        } else {
+          setStatus("Plan revised. Continue iterating or scaffold.", "ok");
+        }
+      } catch (error) {
+        setStatus(String(error), "error");
+        setInvocations({ error: String(error) });
+      } finally {
+        generatePlanBtn.disabled = false;
+        updateActionButtons();
+      }
+    }
+
+    async function submitScaffold() {
+      if (dryRunEl.checked) {
+        setStatus("Disable dry-run to scaffold.", "warn");
+        return;
+      }
+      if (!currentPlanContext || !currentPlanContext.plan) {
+        setStatus("Generate and approve a plan before scaffolding.", "warn");
+        return;
+      }
+
+      generatePlanBtn.disabled = true;
+      revisePlanBtn.disabled = true;
+      scaffoldBtn.disabled = true;
+      setStatus("Scaffolding approved plan...", "warn");
+      try {
+        const response = await fetch("/api/scaffold", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            provider: currentPlanContext.provider,
+            model: currentPlanContext.model,
+            request: currentPlanContext.request,
+            plan: currentPlanContext.plan,
+            overwrite: overwriteEl.checked
+          })
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.error || "Scaffolding failed.");
+        }
+        setResult(payload);
+        setInvocations({ info: "No LLM call: scaffolding executed from approved plan." });
+        if (Array.isArray(payload.prompt_history)) {
+          refillPromptHistory(payload.prompt_history);
+        }
+        clearCurrentPlanContext();
+        setStatus("Project scaffolded successfully.", "ok");
+      } catch (error) {
+        setStatus(String(error), "error");
+        setInvocations({ error: String(error) });
+      } finally {
+        generatePlanBtn.disabled = false;
+        updateActionButtons();
       }
     }
 
@@ -649,48 +827,8 @@ def _render_index_html() -> str:
       const selectedPrompt = historyPromptEl.value.trim();
       if (!selectedPrompt) return;
       requestEl.value = selectedPrompt;
+      invalidatePlanIfInputsChanged();
       setStatus("Prompt loaded from history.", "ok");
-    }
-
-    async function scaffoldFromLastDryRun() {
-      if (!lastDryRunContext) {
-        setStatus("No dry-run available to scaffold.", "warn");
-        return;
-      }
-
-      runBtn.disabled = true;
-      runFromDryRunBtn.disabled = true;
-      setStatus("Scaffolding from last dry-run...", "warn");
-      try {
-        const response = await fetch("/api/scaffold-from-dry-run", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            provider: lastDryRunContext.provider,
-            model: lastDryRunContext.model,
-            request: lastDryRunContext.request,
-            plan: lastDryRunContext.plan,
-            overwrite: overwriteEl.checked
-          })
-        });
-        const payload = await response.json();
-        if (!response.ok) {
-          throw new Error(payload.error || "Scaffold from dry-run failed.");
-        }
-        setResult(payload);
-        setInvocations({ info: "No LLM call: scaffold generated from stored dry-run plan." });
-        if (Array.isArray(payload.prompt_history)) {
-          refillPromptHistory(payload.prompt_history);
-        }
-        lastDryRunContext = null;
-        setStatus("Project scaffolded from dry-run successfully.", "ok");
-      } catch (error) {
-        setStatus(String(error), "error");
-        setInvocations({ error: String(error) });
-      } finally {
-        runBtn.disabled = false;
-        runFromDryRunBtn.disabled = lastDryRunContext === null;
-      }
     }
 
     async function boot() {
@@ -702,7 +840,8 @@ def _render_index_html() -> str:
         requestEl.value = options.default_request || "";
         dryRunEl.checked = Boolean(options.dry_run);
         overwriteEl.checked = Boolean(options.overwrite);
-        runFromDryRunBtn.disabled = true;
+        planChangeRequestEl.value = "";
+        clearCurrentPlanContext();
         setResult({ info: "Ready." });
         setInvocations([]);
         if (options.model_error) {
@@ -715,11 +854,18 @@ def _render_index_html() -> str:
       }
     }
 
-    providerEl.addEventListener("change", () => { void refreshModels(); });
+    providerEl.addEventListener("change", () => {
+      invalidatePlanIfInputsChanged();
+      void refreshModels();
+    });
+    modelEl.addEventListener("change", () => { invalidatePlanIfInputsChanged(); });
+    requestEl.addEventListener("input", () => { invalidatePlanIfInputsChanged(); });
+    dryRunEl.addEventListener("change", () => { updateActionButtons(); });
     refreshBtn.addEventListener("click", () => { void refreshModels(); });
-    runBtn.addEventListener("click", () => { void submitRun(); });
+    generatePlanBtn.addEventListener("click", () => { void submitPlan(); });
+    revisePlanBtn.addEventListener("click", () => { void submitPlanRevision(); });
+    scaffoldBtn.addEventListener("click", () => { void submitScaffold(); });
     useHistoryBtn.addEventListener("click", () => { applySelectedHistoryPrompt(); });
-    runFromDryRunBtn.addEventListener("click", () => { void scaffoldFromLastDryRun(); });
     void boot();
   </script>
 </body>
@@ -799,11 +945,14 @@ def _handler_factory(runtime: WebRuntime) -> type[BaseHTTPRequestHandler]:
 
         def do_POST(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
-            if parsed.path == "/api/run":
-                self._handle_run()
+            if parsed.path in {"/api/run", "/api/plan"}:
+                self._handle_plan()
                 return
-            if parsed.path == "/api/scaffold-from-dry-run":
-                self._handle_scaffold_from_dry_run()
+            if parsed.path == "/api/plan/revise":
+                self._handle_plan_revision()
+                return
+            if parsed.path in {"/api/scaffold-from-dry-run", "/api/scaffold"}:
+                self._handle_scaffold_from_plan()
                 return
             _json_response(
                 self,
@@ -860,24 +1009,20 @@ def _handler_factory(runtime: WebRuntime) -> type[BaseHTTPRequestHandler]:
                 },
             )
 
-        def _handle_run(self) -> None:
+        def _handle_plan(self) -> None:
             try:
                 payload = _read_json_body(self)
                 user_request = _coerce_str(payload.get("request"))
                 provider_name = _coerce_str(payload.get("provider"), default=runtime.defaults.provider_name)
                 model_name = _coerce_str(payload.get("model"), default=runtime.defaults.model)
-                dry_run = _coerce_bool(payload.get("dry_run"), default=runtime.defaults.dry_run)
-                overwrite = _coerce_bool(payload.get("overwrite"), default=runtime.defaults.overwrite)
                 if not user_request:
                     raise ValueError("Field 'request' is required.")
 
-                result = _run_agent_request(
+                result = _run_initial_plan_request(
                     repo_root=runtime.repo_root,
                     provider_name=provider_name,
                     model=model_name,
                     user_request=user_request,
-                    dry_run=dry_run,
-                    overwrite=overwrite,
                 )
             except ValueError as error:
                 _json_response(self, {"error": str(error)}, status=HTTPStatus.BAD_REQUEST)
@@ -888,7 +1033,35 @@ def _handler_factory(runtime: WebRuntime) -> type[BaseHTTPRequestHandler]:
 
             _json_response(self, result)
 
-        def _handle_scaffold_from_dry_run(self) -> None:
+        def _handle_plan_revision(self) -> None:
+            try:
+                payload = _read_json_body(self)
+                user_request = _coerce_str(payload.get("request"))
+                provider_name = _coerce_str(payload.get("provider"), default=runtime.defaults.provider_name)
+                model_name = _coerce_str(payload.get("model"), default=runtime.defaults.model)
+                current_plan_payload = payload.get("current_plan")
+                plan_change_request = _coerce_str(payload.get("plan_change_request"))
+                if not user_request:
+                    raise ValueError("Field 'request' is required.")
+
+                result = _run_plan_revision_request(
+                    repo_root=runtime.repo_root,
+                    provider_name=provider_name,
+                    model=model_name,
+                    user_request=user_request,
+                    current_plan_payload=current_plan_payload,
+                    plan_change_request=plan_change_request,
+                )
+            except ValueError as error:
+                _json_response(self, {"error": str(error)}, status=HTTPStatus.BAD_REQUEST)
+                return
+            except Exception as error:  # noqa: BLE001
+                _json_response(self, {"error": str(error)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+                return
+
+            _json_response(self, result)
+
+        def _handle_scaffold_from_plan(self) -> None:
             try:
                 payload = _read_json_body(self)
                 user_request = _coerce_str(payload.get("request"))
@@ -899,7 +1072,7 @@ def _handler_factory(runtime: WebRuntime) -> type[BaseHTTPRequestHandler]:
                 if not user_request:
                     raise ValueError("Field 'request' is required.")
 
-                result = _run_scaffold_from_dry_run(
+                result = _run_scaffold_from_plan(
                     repo_root=runtime.repo_root,
                     provider_name=provider_name,
                     model=model_name,

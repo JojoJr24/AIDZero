@@ -11,6 +11,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from agent.models import PlanningResult
 from agent.provider_registry import ProviderRegistry
 from agent.prompt_history import PromptHistoryStore
 from agent.service import AgentCreator
@@ -21,6 +22,74 @@ def _format_list(values: list[str]) -> str:
     if not values:
         return "(none)"
     return ", ".join(values)
+
+
+def _print_plan(plan_result: PlanningResult, *, revision_round: int) -> None:
+    print("\n=== Agent Plan ===")
+    print(f"Iteration: {revision_round + 1}")
+    print(f"Agent: {plan_result.plan.agent_name}")
+    print(f"Project folder: {plan_result.plan.project_folder}")
+    print(f"Goal: {plan_result.plan.goal}")
+    summary = plan_result.plan.summary.strip()
+    if len(summary) > 420:
+        summary = summary[:417].rstrip() + "..."
+    print(f"Summary: {summary}")
+    print("Requirements:")
+    print(f"- Providers: {_format_list(plan_result.plan.required_llm_providers)}")
+    print(f"- Skills: {_format_list(plan_result.plan.required_skills)}")
+    print(f"- Tools: {_format_list(plan_result.plan.required_tools)}")
+    print(f"- MCP: {_format_list(plan_result.plan.required_mcp)}")
+    print(f"- UI: {_format_list(plan_result.plan.required_ui)}")
+    if plan_result.plan.warnings:
+        print(f"Warnings: {_format_list(plan_result.plan.warnings)}")
+
+
+def _review_plan_interactively(
+    *,
+    creator: AgentCreator,
+    request: str,
+    initial_result: PlanningResult,
+    dry_run: bool,
+) -> PlanningResult | None:
+    planning_result = initial_result
+    revision_round = 0
+
+    while True:
+        _print_plan(planning_result, revision_round=revision_round)
+        if dry_run:
+            action = input(
+                "\nPlan actions: [a]ccept and finish dry-run, [r]equest changes, [c]ancel\n> "
+            ).strip().lower()
+        else:
+            action = input(
+                "\nPlan actions: [a]ccept and continue to scaffold, [r]equest changes, [c]ancel\n> "
+            ).strip().lower()
+
+        if action in {"a", "accept"}:
+            return planning_result
+        if action in {"c", "cancel"}:
+            print("Plan review cancelled.")
+            return None
+        if action not in {"r", "revise", "change"}:
+            print("warning> invalid action. Use a, r, or c.")
+            continue
+
+        change_request = input("Describe the plan changes you want:\n> ").strip()
+        if not change_request:
+            print("warning> empty change request; plan not modified.")
+            continue
+
+        try:
+            planning_result = creator.revise_requirements(
+                user_request=request,
+                current_plan=planning_result.plan,
+                plan_change_request=change_request,
+                ui_name="terminal",
+            )
+        except Exception as error:  # noqa: BLE001
+            print(f"error> plan revision failed: {error}")
+            continue
+        revision_round += 1
 
 
 def parse_args() -> argparse.Namespace:
@@ -52,7 +121,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--yes",
         action="store_true",
-        help="Skip interactive confirmation and scaffold immediately (unless --dry-run).",
+        help="Skip interactive plan review and scaffold immediately (unless --dry-run).",
     )
     return parser.parse_args()
 
@@ -94,35 +163,29 @@ def run_terminal_agent(
         print(f"error> planning failed: {error}")
         return 1
 
-    print("\n=== Agent Plan ===")
-    print(f"Agent: {planning_result.plan.agent_name}")
-    print(f"Project folder: {planning_result.plan.project_folder}")
-    print(f"Goal: {planning_result.plan.goal}")
-    summary = planning_result.plan.summary.strip()
-    if len(summary) > 420:
-        summary = summary[:417].rstrip() + "..."
-    print(f"Summary: {summary}")
-    print("Requirements:")
-    print(f"- Providers: {_format_list(planning_result.plan.required_llm_providers)}")
-    print(f"- Skills: {_format_list(planning_result.plan.required_skills)}")
-    print(f"- Tools: {_format_list(planning_result.plan.required_tools)}")
-    print(f"- MCP: {_format_list(planning_result.plan.required_mcp)}")
-    print(f"- UI: {_format_list(planning_result.plan.required_ui)}")
+    final_planning_result = planning_result
+    if yes:
+        _print_plan(planning_result, revision_round=0)
+    else:
+        reviewed_result = _review_plan_interactively(
+            creator=creator,
+            request=request,
+            initial_result=planning_result,
+            dry_run=dry_run,
+        )
+        if reviewed_result is None:
+            return 0
+        final_planning_result = reviewed_result
 
     if dry_run:
+        print("Dry-run completed with the approved plan.")
         return 0
-
-    if not yes:
-        confirmation = input("\nProceed with scaffolding? [y/N] ").strip().lower()
-        if confirmation not in {"y", "yes"}:
-            print("Scaffolding cancelled.")
-            return 0
 
     try:
         scaffold_result = creator.create_agent_project_from_plan(
             user_request=request,
-            plan=planning_result.plan,
-            catalog=planning_result.catalog,
+            plan=final_planning_result.plan,
+            catalog=final_planning_result.catalog,
             overwrite=overwrite,
         )
     except Exception as error:  # noqa: BLE001
