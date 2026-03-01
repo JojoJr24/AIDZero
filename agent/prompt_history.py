@@ -1,71 +1,62 @@
-"""Persistent prompt history shared by UI runtimes."""
+"""Prompt history persistence for terminal/web style UIs."""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
-HISTORY_DIRNAME = ".aidzero"
-HISTORY_FILENAME = "prompt_history.json"
-DEFAULT_MAX_PROMPTS = 50
-
 
 class PromptHistoryStore:
-    """Stores prompt history in a repository-local JSON file."""
+    """Stores prompts in `.aidzero/prompt_history.json`."""
 
-    def __init__(self, repo_root: Path, *, max_prompts: int = DEFAULT_MAX_PROMPTS) -> None:
+    def __init__(self, repo_root: Path, *, max_items: int = 200) -> None:
         self.repo_root = repo_root.resolve()
-        self.max_prompts = max(1, int(max_prompts))
-        self.path = self.repo_root / HISTORY_DIRNAME / HISTORY_FILENAME
+        self.max_items = max(1, max_items)
+        self.filepath = self.repo_root / ".aidzero" / "prompt_history.json"
 
     def list_prompts(self, *, limit: int | None = None) -> list[str]:
-        prompts = self._load_prompts()
-        if limit is None:
-            return prompts
-        if limit <= 0:
-            return []
-        return prompts[:limit]
+        items = self._load()
+        if limit is None or limit <= 0:
+            return items
+        return items[:limit]
 
     def add_prompt(self, prompt: str) -> list[str]:
-        normalized = prompt.strip()
-        if not normalized:
+        text = prompt.strip()
+        if not text:
             return self.list_prompts()
 
-        prompts = [item for item in self._load_prompts() if item != normalized]
-        prompts.insert(0, normalized)
-        prompts = prompts[: self.max_prompts]
-        self._save_prompts(prompts)
-        return prompts
+        items = [item for item in self._load() if item != text]
+        items.insert(0, text)
+        items = items[: self.max_items]
+        self._save(items)
+        return items
 
-    def _load_prompts(self) -> list[str]:
-        if not self.path.exists():
+    def _load(self) -> list[str]:
+        if not self.filepath.exists():
             return []
-
         try:
-            payload = json.loads(self.path.read_text(encoding="utf-8"))
-        except Exception:  # noqa: BLE001
+            payload = json.loads(self.filepath.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return []
+        if not isinstance(payload, dict):
+            return []
+        raw_items = payload.get("prompts")
+        if not isinstance(raw_items, list):
             return []
 
-        if isinstance(payload, list):
-            source_items = payload
-        elif isinstance(payload, dict):
-            source_items = payload.get("prompts", [])
-        else:
-            return []
-
-        prompts: list[str] = []
-        for item in source_items:
-            if not isinstance(item, str):
+        unique: list[str] = []
+        for raw_item in raw_items:
+            if not isinstance(raw_item, str):
                 continue
-            stripped = item.strip()
-            if stripped:
-                prompts.append(stripped)
-        return prompts[: self.max_prompts]
+            item = raw_item.strip()
+            if item and item not in unique:
+                unique.append(item)
+        return unique[: self.max_items]
 
-    def _save_prompts(self, prompts: list[str]) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {"prompts": prompts}
-        self.path.write_text(
+    def _save(self, items: list[str]) -> None:
+        self.filepath.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"prompts": items}
+        self.filepath.write_text(
             json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
             encoding="utf-8",
         )

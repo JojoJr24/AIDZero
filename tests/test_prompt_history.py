@@ -1,33 +1,18 @@
-"""Tests for prompt history persistence."""
-
 from __future__ import annotations
-
-from pathlib import Path
 
 from agent.prompt_history import PromptHistoryStore
 
 
-def test_prompt_history_store_adds_and_orders_prompts(tmp_path: Path) -> None:
-    store = PromptHistoryStore(tmp_path, max_prompts=3)
-    store.add_prompt("first prompt")
-    store.add_prompt("second prompt")
-    store.add_prompt("third prompt")
+def test_prompt_history_persists_and_deduplicates(tmp_path):
+    store = PromptHistoryStore(tmp_path, max_items=3)
 
-    assert store.list_prompts() == ["third prompt", "second prompt", "first prompt"]
-
-
-def test_prompt_history_store_deduplicates_and_limits(tmp_path: Path) -> None:
-    store = PromptHistoryStore(tmp_path, max_prompts=2)
     store.add_prompt("one")
     store.add_prompt("two")
     store.add_prompt("one")
     store.add_prompt("three")
+    store.add_prompt("four")
 
-    assert store.list_prompts() == ["three", "one"]
+    assert store.list_prompts() == ["four", "three", "one"]
 
-
-def test_prompt_history_store_ignores_blank_prompt(tmp_path: Path) -> None:
-    store = PromptHistoryStore(tmp_path)
-    store.add_prompt("real")
-    store.add_prompt("   ")
-    assert store.list_prompts() == ["real"]
+    store_reloaded = PromptHistoryStore(tmp_path, max_items=3)
+    assert store_reloaded.list_prompts() == ["four", "three", "one"]

@@ -1,94 +1,68 @@
-"""Data models for cataloging, planning, and scaffolding agents."""
+"""Shared models for the runtime pipeline."""
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
-from pathlib import Path
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 
-@dataclass
-class ComponentItem:
-    """Single reusable repository component."""
+def utc_now_iso() -> str:
+    return datetime.now(UTC).replace(microsecond=0).isoformat()
+
+
+@dataclass(frozen=True)
+class TriggerEvent:
+    """One unit of work emitted by the gateway."""
+
+    kind: str
+    source: str
+    prompt: str
+    created_at: str = field(default_factory=utc_now_iso)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ToolSchema:
+    """Tool schema injected into the LLM each turn."""
 
     name: str
-    path: Path
-    kind: str
-    description: str | None = None
-
-    def to_prompt_dict(self) -> dict[str, Any]:
-        payload = {
-            "name": self.name,
-            "kind": self.kind,
-            "path": self.path.as_posix(),
-        }
-        if self.description:
-            payload["description"] = self.description
-        return payload
+    description: str
+    parameters: dict[str, Any]
 
 
-@dataclass
-class ComponentCatalog:
-    """Inventory of reusable modules in the current repository."""
+@dataclass(frozen=True)
+class ToolCall:
+    """Normalized tool call extracted from model output."""
 
-    root: Path
-    llm_providers: list[ComponentItem] = field(default_factory=list)
-    skills: list[ComponentItem] = field(default_factory=list)
-    tools: list[ComponentItem] = field(default_factory=list)
-    mcp: list[ComponentItem] = field(default_factory=list)
-    ui: list[ComponentItem] = field(default_factory=list)
-
-    def as_prompt_payload(self) -> dict[str, Any]:
-        return {
-            "llm_providers": [item.to_prompt_dict() for item in self.llm_providers],
-            "skills": [item.to_prompt_dict() for item in self.skills],
-            "tools": [item.to_prompt_dict() for item in self.tools],
-            "mcp": [item.to_prompt_dict() for item in self.mcp],
-            "ui": [item.to_prompt_dict() for item in self.ui],
-        }
-
-    def names_by_kind(self) -> dict[str, set[str]]:
-        return {
-            "llm_providers": {item.name for item in self.llm_providers},
-            "skills": {item.name for item in self.skills},
-            "tools": {item.name for item in self.tools},
-            "mcp": {item.name for item in self.mcp},
-            "ui": {item.name for item in self.ui},
-        }
+    name: str
+    arguments: dict[str, Any]
+    raw_block: str
 
 
-@dataclass
-class AgentPlan:
-    """Structured plan produced by the planning model."""
+@dataclass(frozen=True)
+class TurnResult:
+    """Final outcome of one gateway event."""
 
-    agent_name: str
-    project_folder: str
-    goal: str
-    summary: str
-    required_llm_providers: list[str] = field(default_factory=list)
-    required_skills: list[str] = field(default_factory=list)
-    required_tools: list[str] = field(default_factory=list)
-    required_mcp: list[str] = field(default_factory=list)
-    required_ui: list[str] = field(default_factory=list)
-    folder_blueprint: list[str] = field(default_factory=list)
-    implementation_steps: list[str] = field(default_factory=list)
-    warnings: list[str] = field(default_factory=list)
-    raw_response: str = ""
-
-    def to_dict(self) -> dict[str, Any]:
-        payload = asdict(self)
-        payload["raw_response"] = self.raw_response
-        return payload
+    event: TriggerEvent
+    response: str
+    rounds: int
+    used_tools: list[str]
 
 
-@dataclass
-class ScaffoldResult:
-    """Output from project scaffolding/copying."""
+@dataclass(frozen=True)
+class RuntimeConfig:
+    """User-selected runtime defaults."""
 
-    destination: Path
-    created_directories: list[Path] = field(default_factory=list)
-    copied_items: list[Path] = field(default_factory=list)
-    entrypoint_file: Path | None = None
-    runtime_config_file: Path | None = None
-    metadata_file: Path | None = None
-    process_log_file: Path | None = None
+    ui: str
+    provider: str
+    model: str
+
+
+@dataclass(frozen=True)
+class ToolExecutionResult:
+    """Structured tool response fed back into the model."""
+
+    tool_name: str
+    status: str
+    payload: Any
