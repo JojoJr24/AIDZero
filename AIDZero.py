@@ -229,7 +229,7 @@ def _ensure_runtime_config(
     provider_names = _discover_providers(repo_root)
 
     if not ui_names:
-        raise RuntimeError("No runnable UI found under UI/<name>.py")
+        raise RuntimeError("No runnable UI found under UI/<name>/entrypoint.py")
     if not provider_names:
         raise RuntimeError("No providers found under LLMProviders/<name>/provider.py")
 

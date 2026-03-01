@@ -6,7 +6,7 @@ import importlib.util
 import inspect
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 
 class LLMClient:
@@ -33,6 +33,24 @@ class LLMClient:
         raise RuntimeError(
             f"Provider '{self.provider_name}' does not expose chat(...) or generate_text(...)."
         )
+
+    def complete_stream(self, messages: list[dict[str, Any]], **kwargs: Any) -> Iterator[str]:
+        if hasattr(self.provider, "stream_generate_text"):
+            prompt = self._flatten_messages(messages)
+            for chunk in self.provider.stream_generate_text(self.model, prompt, **kwargs):
+                text = str(chunk)
+                if text:
+                    yield text
+            return
+
+        # Fallback to non-streaming providers.
+        text = self.complete(messages, **kwargs)
+        if text:
+            yield text
+
+    def stop_stream(self) -> None:
+        if hasattr(self.provider, "stop_stream"):
+            self.provider.stop_stream()
 
     def _load_provider(self, provider_name: str) -> Any:
         provider_file = self.repo_root / "LLMProviders" / provider_name / "provider.py"

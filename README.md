@@ -5,8 +5,8 @@ This repository contains a modular LLM agent runtime built for AIDZero.
 ## Implemented Architecture
 
 - **Dynamic UI runtime**
-  - UIs are loaded dynamically from `UI/*.py`
-  - each UI module exposes `run_ui(...)`
+  - UIs are loaded dynamically from `UI/<name>/entrypoint.py`
+  - each UI entrypoint exposes `run_ui(...)`
 - **Gateway triggers**
   - `heartbeat` from `HEARTBEAT.md`
   - `cron` from `.aidzero/cron_prompt.txt`
