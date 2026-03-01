@@ -17,27 +17,7 @@ wheels/
 generated_agents/
 Generated_agents/
 
-# Keep only AID-* subfolders inside these roots
-LLMProviders/*
-!LLMProviders/AID-*/
-!LLMProviders/AID-*/**
-!LLMProviders/base.py
-!LLMProviders/provider_base.py
-!LLMProviders/openai_compatible_provider.py
-
-SKILLS/*
-!SKILLS/AID-*/
-!SKILLS/AID-*/**
-
-MCP/*
-!MCP/AID-*/
-!MCP/AID-*/**
-!MCP/mcporter.json
-!MCP/run-tool-gateway.sh
-
-TOOLS/*
-!TOOLS/AID-*/
-!TOOLS/AID-*/**
+# No folder-name restrictions: keep all project modules tracked by default.
 
 # Dependency folders and caches
 node_modules/

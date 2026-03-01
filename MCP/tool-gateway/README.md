@@ -15,7 +15,7 @@ Gateway MCP server definitions are loaded from:
 <repo-root>/MCP/mcporter.json
 ```
 
-On startup, if legacy config exists at `.aidzero/mcporter.json` or `MCP/AID-tool-gateway/config/mcporter.json`, it is copied to `MCP/mcporter.json`.
+On startup, if legacy config exists at `.aidzero/mcporter.json` or `MCP/tool-gateway/config/mcporter.json`, it is copied to `MCP/mcporter.json`.
 
 ## Add MCP Servers
 
@@ -40,7 +40,7 @@ Example:
     },
     "chrome-devtools": {
       "command": [
-        "./AID-tool-gateway/scripts/run-chrome-devtools.sh",
+        "./tool-gateway/scripts/run-chrome-devtools.sh",
         "--headless=false",
         "--browserUrl=http://127.0.0.1:9222"
       ]
@@ -57,8 +57,8 @@ For command-based servers, relative paths are resolved from `MCP/` (the folder t
 ## Commands
 
 ```bash
-cd MCP/AID-tool-gateway && npm install
-cd MCP/AID-tool-gateway && npm start
-cd MCP/AID-tool-gateway && npm run dev
-cd MCP/AID-tool-gateway && node scripts/smoke.mjs
+cd MCP/tool-gateway && npm install
+cd MCP/tool-gateway && npm start
+cd MCP/tool-gateway && npm run dev
+cd MCP/tool-gateway && node scripts/smoke.mjs
 ```

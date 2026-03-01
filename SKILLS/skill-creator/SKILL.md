@@ -1,5 +1,5 @@
 ---
-name: AID-skill-creator
+name: skill-creator
 description: Create or modify an Agent skill with clear triggers, concise workflow instructions, and optional scripts/references/assets. Use when the user asks to build a new skill or refactor an existing one.
 ---
 

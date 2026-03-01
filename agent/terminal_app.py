@@ -36,7 +36,7 @@ class TerminalApp:
 
         while True:
             try:
-                user_input = self._prompt_with_history()
+                user_input = self._prompt_input()
             except (KeyboardInterrupt, EOFError):
                 print("\nExiting.")
                 return 0
@@ -71,24 +71,8 @@ class TerminalApp:
                 continue
             self._run_events(events)
 
-    def _prompt_with_history(self) -> str:
-        recent = self.history.list_prompts(limit=8)
-        if not recent:
-            return input("\n> ")
-
-        print("\nRecent prompts:")
-        for index, item in enumerate(recent, start=1):
-            print(f"{index}. {item}")
-        choice = input("Select number or type a new prompt (Enter for new): ").strip()
-        if choice.isdigit():
-            idx = int(choice)
-            if 1 <= idx <= len(recent):
-                return recent[idx - 1]
-            print("Invalid history index.")
-            return ""
-        if choice:
-            return choice
-        return input("> ")
+    def _prompt_input(self) -> str:
+        return input("\n> ")
 
     def _print_history(self) -> None:
         prompts = self.history.list_prompts(limit=30)

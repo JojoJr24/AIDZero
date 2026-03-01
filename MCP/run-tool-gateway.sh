@@ -8,7 +8,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-ROOT="$SCRIPT_DIR/AID-tool-gateway"
+ROOT="$SCRIPT_DIR/tool-gateway"
 
 if ! command -v node >/dev/null 2>&1; then
   echo "Node.js runtime missing in PATH. Install Node.js or set PATH accordingly." >&2

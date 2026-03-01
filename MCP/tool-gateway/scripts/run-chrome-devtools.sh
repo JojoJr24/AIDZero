@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Script: tool-gateway/scripts/run-chrome-devtools.sh
 # Objective: launch the chrome-devtools MCP server using the locally installed package to avoid npx prompts.
-# Usage: MCP/AID-tool-gateway/scripts/run-chrome-devtools.sh [chrome-devtools args]
+# Usage: MCP/tool-gateway/scripts/run-chrome-devtools.sh [chrome-devtools args]
 # Inputs: arguments are forwarded verbatim to chrome-devtools-mcp.
 # Side-effects: requires Node.js in PATH and npm install completed.
 

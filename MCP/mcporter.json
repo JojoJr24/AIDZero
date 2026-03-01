@@ -20,7 +20,7 @@
       "type": "local",
       "enabled": true,
       "command": [
-        "./AID-tool-gateway/scripts/run-chrome-devtools.sh",
+        "./tool-gateway/scripts/run-chrome-devtools.sh",
         "--headless=false",
         "--browserUrl=http://127.0.0.1:9222"
       ]

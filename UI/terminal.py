@@ -1,11 +1,11 @@
-"""Terminal UI entrypoint."""
+"""Terminal UI module loaded dynamically from UI/*.py."""
 
 from __future__ import annotations
 
 from pathlib import Path
 import sys
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
@@ -34,7 +34,6 @@ def run_ui(
 
     root = (repo_root or REPO_ROOT).resolve()
     options = ui_options or {}
-
     trigger = options.get("trigger", "interactive").strip().lower() or "interactive"
 
     llm = LLMClient(repo_root=root, provider_name=provider_name, model=model)

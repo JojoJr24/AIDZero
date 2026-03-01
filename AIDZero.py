@@ -5,7 +5,10 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+import importlib.util
+import inspect
 from pathlib import Path
+from types import ModuleType
 
 from agent.models import RuntimeConfig
 from agent.runtime_config import RuntimeConfigStore
@@ -105,6 +108,115 @@ def _pick(prompt: str, options: list[str], default: str | None = None) -> str:
         print("Invalid selection.")
 
 
+def _load_provider_module(repo_root: Path, provider_name: str) -> ModuleType:
+    provider_file = repo_root / "LLMProviders" / provider_name / "provider.py"
+    if not provider_file.is_file():
+        raise FileNotFoundError(f"Provider file not found: {provider_file}")
+
+    module_name = f"aidzero_provider_selector_{provider_name.replace('-', '_')}"
+    spec = importlib.util.spec_from_file_location(module_name, provider_file)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Unable to load provider module: {provider_file}")
+
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _find_provider_class(module: ModuleType) -> type[object]:
+    candidates: list[type[object]] = []
+    for _, member in inspect.getmembers(module, inspect.isclass):
+        if member.__module__ != module.__name__:
+            continue
+        if not member.__name__.endswith("Provider"):
+            continue
+        if member.__name__ == "OpenAICompatibleProvider":
+            continue
+        candidates.append(member)
+
+    if not candidates:
+        raise RuntimeError(f"No provider class found in '{module.__name__}'.")
+    candidates.sort(key=lambda item: item.__name__)
+    return candidates[0]
+
+
+def _list_provider_models(repo_root: Path, provider_name: str) -> list[str]:
+    module = _load_provider_module(repo_root, provider_name)
+    provider_cls = _find_provider_class(module)
+    provider = provider_cls()
+
+    model_names: list[str] = []
+    if hasattr(provider, "list_model_names"):
+        try:
+            raw_names = provider.list_model_names()
+            if isinstance(raw_names, list):
+                for item in raw_names:
+                    if isinstance(item, str) and item.strip():
+                        model_names.append(item.strip())
+        except Exception as error:  # noqa: BLE001
+            raise RuntimeError(f"Could not list models using list_model_names(): {error}") from error
+    elif hasattr(provider, "list_models"):
+        try:
+            raw_models = provider.list_models()
+            if isinstance(raw_models, list):
+                for item in raw_models:
+                    if not isinstance(item, dict):
+                        continue
+                    for key in ("id", "name", "model"):
+                        value = item.get(key)
+                        if isinstance(value, str) and value.strip():
+                            model_names.append(value.strip())
+                            break
+        except Exception as error:  # noqa: BLE001
+            raise RuntimeError(f"Could not list models using list_models(): {error}") from error
+
+    unique: list[str] = []
+    for model_name in model_names:
+        if model_name not in unique:
+            unique.append(model_name)
+    return unique
+
+
+def _pick_model_for_provider(repo_root: Path, provider_name: str) -> str:
+    try:
+        models = _list_provider_models(repo_root, provider_name)
+    except Exception as error:  # noqa: BLE001
+        print(f"warning> failed to fetch model list for provider '{provider_name}': {error}")
+        manual = input("Model name (required): ").strip()
+        if not manual:
+            raise RuntimeError("Model name cannot be empty.")
+        return manual
+
+    if not models:
+        print(f"warning> provider '{provider_name}' returned an empty model list.")
+        manual = input("Model name (required): ").strip()
+        if not manual:
+            raise RuntimeError("Model name cannot be empty.")
+        return manual
+
+    print(f"\nAvailable models for provider '{provider_name}':")
+    for index, model_name in enumerate(models, start=1):
+        marker = " (default)" if index == 1 else ""
+        print(f"{index}. {model_name}{marker}")
+    print("m. Enter model manually")
+
+    while True:
+        raw = input(f"Choose 1-{len(models)} (Enter for default, or 'm'): ").strip().lower()
+        if not raw:
+            return models[0]
+        if raw == "m":
+            manual = input("Model name (required): ").strip()
+            if manual:
+                return manual
+            print("Model name cannot be empty.")
+            continue
+        if raw.isdigit():
+            idx = int(raw)
+            if 1 <= idx <= len(models):
+                return models[idx - 1]
+        print("Invalid selection.")
+
+
 def _ensure_runtime_config(
     *,
     repo_root: Path,
@@ -117,7 +229,7 @@ def _ensure_runtime_config(
     provider_names = _discover_providers(repo_root)
 
     if not ui_names:
-        raise RuntimeError("No runnable UI found under UI/<name>/entrypoint.py")
+        raise RuntimeError("No runnable UI found under UI/<name>.py")
     if not provider_names:
         raise RuntimeError("No providers found under LLMProviders/<name>/provider.py")
 
@@ -128,9 +240,7 @@ def _ensure_runtime_config(
 
     ui = _pick("Select UI:", ui_names, default="terminal")
     provider = _pick("Select provider:", provider_names)
-    model = input("Model name (required): ").strip()
-    if not model:
-        raise RuntimeError("Model name cannot be empty.")
+    model = _pick_model_for_provider(repo_root, provider)
 
     config = RuntimeConfig(ui=ui, provider=provider, model=model)
     store.save(config)
