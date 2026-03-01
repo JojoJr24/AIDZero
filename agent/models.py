@@ -1,93 +1,68 @@
-"""Shared data models for the AIDZero runtime."""
+"""Shared models for the runtime pipeline."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from pathlib import Path
+from datetime import UTC, datetime
 from typing import Any
 
 
+def utc_now_iso() -> str:
+    return datetime.now(UTC).replace(microsecond=0).isoformat()
+
+
 @dataclass(frozen=True)
-class ComponentItem:
-    """One discovered runtime component."""
+class TriggerEvent:
+    """One unit of work emitted by the gateway."""
+
+    kind: str
+    source: str
+    prompt: str
+    created_at: str = field(default_factory=utc_now_iso)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ToolSchema:
+    """Tool schema injected into the LLM each turn."""
 
     name: str
-    path: Path
-    description: str | None = None
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "name": self.name,
-            "path": str(self.path),
-            "description": self.description,
-        }
+    description: str
+    parameters: dict[str, Any]
 
 
 @dataclass(frozen=True)
-class ComponentCatalog:
-    """Repository component inventory used by planning/runtime layers."""
+class ToolCall:
+    """Normalized tool call extracted from model output."""
 
-    root: Path
-    llm_providers: list[ComponentItem]
-    skills: list[ComponentItem]
-    tools: list[ComponentItem]
-    mcp: list[ComponentItem]
-    ui: list[ComponentItem]
+    name: str
+    arguments: dict[str, Any]
+    raw_block: str
 
 
 @dataclass(frozen=True)
-class AgentPlan:
-    """Normalized planning payload returned by the runtime."""
+class TurnResult:
+    """Final outcome of one gateway event."""
 
-    agent_name: str
-    project_folder: str
-    goal: str
-    summary: str
-    required_llm_providers: list[str] = field(default_factory=list)
-    required_skills: list[str] = field(default_factory=list)
-    required_tools: list[str] = field(default_factory=list)
-    required_mcp: list[str] = field(default_factory=list)
-    required_ui: list[str] = field(default_factory=list)
-    folder_blueprint: list[str] = field(default_factory=list)
-    implementation_steps: list[str] = field(default_factory=list)
-    warnings: list[str] = field(default_factory=list)
-    raw_response: str = ""
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "agent_name": self.agent_name,
-            "project_folder": self.project_folder,
-            "goal": self.goal,
-            "summary": self.summary,
-            "required_llm_providers": list(self.required_llm_providers),
-            "required_skills": list(self.required_skills),
-            "required_tools": list(self.required_tools),
-            "required_mcp": list(self.required_mcp),
-            "required_ui": list(self.required_ui),
-            "folder_blueprint": list(self.folder_blueprint),
-            "implementation_steps": list(self.implementation_steps),
-            "warnings": list(self.warnings),
-            "raw_response": self.raw_response,
-        }
+    event: TriggerEvent
+    response: str
+    rounds: int
+    used_tools: list[str]
 
 
 @dataclass(frozen=True)
-class PlanningResult:
-    """Planning response container used by UIs."""
+class RuntimeConfig:
+    """User-selected runtime defaults."""
 
-    plan: AgentPlan
-    catalog: ComponentCatalog
-    response_text: str
+    ui: str
+    provider: str
+    model: str
 
 
 @dataclass(frozen=True)
-class ScaffoldResult:
-    """Scaffolding output summary used by UIs."""
+class ToolExecutionResult:
+    """Structured tool response fed back into the model."""
 
-    destination: Path
-    created_directories: list[Path]
-    copied_items: list[Path]
-    entrypoint_file: Path | None = None
-    runtime_config_file: Path | None = None
-    metadata_file: Path | None = None
-    process_log_file: Path | None = None
+    tool_name: str
+    status: str
+    payload: Any

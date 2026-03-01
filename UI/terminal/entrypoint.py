@@ -1,4 +1,4 @@
-"""Terminal UI runtime entrypoint."""
+"""Terminal UI entrypoint."""
 
 from __future__ import annotations
 
@@ -9,7 +9,14 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from UI.terminal.agent_terminal import run_terminal_agent
+from agent.engine import AgentEngine
+from agent.gateway import TriggerGateway
+from agent.llm_client import LLMClient
+from agent.memory import MemoryStore
+from agent.prompt_history import PromptHistoryStore
+from agent.storage import JsonlStore
+from agent.terminal_app import TerminalApp
+from agent.tooling import build_default_tool_registry
 
 
 def run_ui(
@@ -23,13 +30,32 @@ def run_ui(
     repo_root: Path | None = None,
     ui_options: dict[str, str] | None = None,
 ) -> int:
-    del ui_options
-    return run_terminal_agent(
-        provider_name=provider_name,
-        model=model,
-        user_request=user_request,
-        dry_run=dry_run,
-        overwrite=overwrite,
-        yes=yes,
-        repo_root=repo_root,
+    del dry_run, overwrite, yes
+
+    root = (repo_root or REPO_ROOT).resolve()
+    options = ui_options or {}
+
+    trigger = options.get("trigger", "interactive").strip().lower() or "interactive"
+
+    llm = LLMClient(repo_root=root, provider_name=provider_name, model=model)
+    memory = MemoryStore(root / ".aidzero" / "memory.json")
+    tools = build_default_tool_registry(root, memory)
+    history_store = JsonlStore(root / ".aidzero" / "store" / "history.jsonl")
+    output_store = JsonlStore(root / ".aidzero" / "store" / "output.jsonl")
+
+    engine = AgentEngine(
+        repo_root=root,
+        llm=llm,
+        tools=tools,
+        history_store=history_store,
+        memory_store=memory,
+        output_store=output_store,
     )
+
+    app = TerminalApp(
+        repo_root=root,
+        engine=engine,
+        gateway=TriggerGateway(root),
+        history=PromptHistoryStore(root),
+    )
+    return app.run(request=user_request, trigger=trigger)

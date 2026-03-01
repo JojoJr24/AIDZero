@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compatibility wrapper for the AIDZero root entrypoint."""
+"""Compatibility wrapper to launch AIDZero."""
 
 from AIDZero import main
 
