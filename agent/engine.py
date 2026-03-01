@@ -139,7 +139,7 @@ class AgentEngine:
                 return text
 
         return (
-            "You are OpenClaw-style runtime agent.\n"
+            "You are the AIDZero runtime agent.\n"
             "Architecture constraints:\n"
             "- Inputs come from a gateway (heartbeat/cron/messengers/webhooks/interactive).\n"
             "- Every turn includes system prompt + tool schemas + JSONL history + memory.\n"

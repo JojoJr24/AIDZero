@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Root runtime launcher for the new OpenClaw-like project."""
+"""Root runtime launcher for the AIDZero agent runtime project."""
 
 from __future__ import annotations
 

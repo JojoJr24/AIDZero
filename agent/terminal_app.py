@@ -31,7 +31,7 @@ class TerminalApp:
             events = self.gateway.collect(trigger=trigger, prompt=request)
             return self._run_events(events)
 
-        print("OpenClaw-style Terminal UI")
+        print("AIDZero Terminal UI")
         print("Commands: /exit, /history, /heartbeat, /cron, /all")
 
         while True:

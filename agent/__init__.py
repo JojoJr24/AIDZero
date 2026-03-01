@@ -1,4 +1,4 @@
-"""OpenClaw-like runtime package."""
+"""AIDZero runtime package."""
 
 from agent.engine import AgentEngine
 from agent.gateway import TriggerEvent, TriggerGateway

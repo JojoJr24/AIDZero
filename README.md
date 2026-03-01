@@ -1,6 +1,6 @@
-# AIDZero OpenClaw-Style Runtime
+# AIDZero Runtime
 
-This repository now contains a fresh implementation of an OpenClaw-like LLM agent runtime.
+This repository contains a modular LLM agent runtime built for AIDZero.
 
 ## Implemented Architecture
 
