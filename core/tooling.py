@@ -6,8 +6,8 @@ import importlib.util
 from pathlib import Path
 from typing import Any, Callable
 
-from agent.memory import MemoryStore
-from agent.models import ToolSchema
+from core.memory import MemoryStore
+from core.models import ToolSchema
 
 ToolExecutor = Callable[[dict[str, Any]], Any]
 LoadedTool = tuple[str, str, dict[str, Any], Callable[..., Any]]
@@ -60,13 +60,26 @@ class ToolRegistry:
         return sorted(self._executors.keys())
 
 
-def build_default_tool_registry(repo_root: Path, memory: MemoryStore) -> ToolRegistry:
+def build_default_tool_registry(
+    repo_root: Path,
+    memory: MemoryStore,
+    *,
+    enabled_names: list[str] | None = None,
+    disabled_names: list[str] | None = None,
+) -> ToolRegistry:
     """Load tools from `TOOLS/*.py` using a file-based plugin contract."""
     tools_root = repo_root / "TOOLS"
     registry = ToolRegistry()
 
+    enabled_set = {name.strip() for name in enabled_names or [] if name and name.strip()}
+    disabled_set = {name.strip() for name in disabled_names or [] if name and name.strip()}
+
     for tool_path in _iter_tool_files(tools_root):
         name, description, parameters, runner = _load_tool_module(tool_path)
+        if name in disabled_set:
+            continue
+        if enabled_set and name not in enabled_set:
+            continue
         registry.register(
             name=name,
             description=description,

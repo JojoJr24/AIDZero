@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from agent.memory import MemoryStore
-from agent.tooling import build_default_tool_registry
+from core.memory import MemoryStore
+from core.tooling import build_default_tool_registry
 
 
 def test_build_default_tool_registry_loads_tools_from_tools_folder(tmp_path):

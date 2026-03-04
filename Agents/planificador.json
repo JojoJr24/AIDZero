@@ -1,0 +1,23 @@
+{
+  "name": "planificador",
+  "description": "Agente orientado a planificar y pensar paso a paso antes de ejecutar.",
+  "system_prompt_file": "system_prompt_planner.md",
+  "features": {
+    "memory": true,
+    "history": true
+  },
+  "modules": {
+    "tools": [
+      "list_files",
+      "read_text",
+      "history_get",
+      "memory_get",
+      "memory_set",
+      "memory_list",
+      "mcp_search_tools",
+      "mcp_describe_tool",
+      "mcp_call_tool"
+    ],
+    "dash": "all"
+  }
+}

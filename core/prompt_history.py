@@ -9,18 +9,23 @@ from pathlib import Path
 class PromptHistoryStore:
     """Stores prompts in `.aidzero/prompt_history.json`."""
 
-    def __init__(self, repo_root: Path, *, max_items: int = 200) -> None:
+    def __init__(self, repo_root: Path, *, max_items: int = 200, enabled: bool = True) -> None:
         self.repo_root = repo_root.resolve()
         self.max_items = max(1, max_items)
+        self.enabled = enabled
         self.filepath = self.repo_root / ".aidzero" / "prompt_history.json"
 
     def list_prompts(self, *, limit: int | None = None) -> list[str]:
+        if not self.enabled:
+            return []
         items = self._load()
         if limit is None or limit <= 0:
             return items
         return items[:limit]
 
     def add_prompt(self, prompt: str) -> list[str]:
+        if not self.enabled:
+            return []
         text = prompt.strip()
         if not text:
             return self.list_prompts()

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agent.engine import AgentEngine
-from agent.gateway import TriggerGateway
-from agent.prompt_history import PromptHistoryStore
+from core.engine import AgentEngine
+from core.gateway import TriggerGateway
+from core.prompt_history import PromptHistoryStore
 
 
 class TerminalApp:

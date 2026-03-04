@@ -10,9 +10,9 @@ import inspect
 from pathlib import Path
 from types import ModuleType
 
-from agent.models import RuntimeConfig
-from agent.runtime_config import RuntimeConfigStore
-from agent.ui_registry import UIRegistry
+from core.models import RuntimeConfig
+from core.runtime_config import RuntimeConfigStore
+from core.ui_registry import UIRegistry
 
 
 @dataclass(frozen=True)
@@ -229,7 +229,7 @@ def _ensure_runtime_config(
     provider_names = _discover_providers(repo_root)
 
     if not ui_names:
-        raise RuntimeError("No runnable UI found under UI/<name>.py")
+        raise RuntimeError("No runnable UI found under UI/<name>/entrypoint.py")
     if not provider_names:
         raise RuntimeError("No providers found under LLMProviders/<name>/provider.py")
 

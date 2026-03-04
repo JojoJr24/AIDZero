@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from agent.prompt_history import PromptHistoryStore
+from core.prompt_history import PromptHistoryStore
 
 
 def test_prompt_history_persists_and_deduplicates(tmp_path):
