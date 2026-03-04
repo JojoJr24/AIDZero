@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from agent.ui_registry import UIRegistry
+from core.ui_registry import UIRegistry
 
 
 def test_ui_registry_discovers_ui_folders_and_runs_entrypoint(tmp_path):

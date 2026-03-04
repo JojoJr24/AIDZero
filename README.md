@@ -41,6 +41,58 @@ uv run AIDZero.py --provider openai --model gpt-4o-mini --ui terminal --request 
 uv run AIDZero.py --provider openai --model gpt-4o-mini --ui terminal --trigger all
 ```
 
+## Trigger Setup (TUI)
+
+From the TUI you can configure trigger integrations with `/setup`:
+
+```text
+/setup cron */5 * * * *
+/setup heartbeat */1 * * * *
+/setup message-origin zendesk .aidzero/inbox/zendesk.jsonl
+/setup webhook-origin stripe .aidzero/inbox/stripe.jsonl
+/setup show
+```
+
+This generates:
+
+- `.aidzero/scripts/run_cron.sh`
+- `.aidzero/scripts/run_heartbeat.sh`
+- `.aidzero/setup/aidzero.crontab`
+- `.aidzero/setup/install_cron.sh`
+- `.aidzero/trigger_sources.json`
+
+Install cron jobs with:
+
+```bash
+bash .aidzero/setup/install_cron.sh
+```
+
+## Agent Profiles (`Agents/*.json`)
+
+- Runtime profiles are loaded from `Agents/*.json`.
+- Active profile is persisted in `.aidzero/agent_profile.json`.
+- Each profile can define:
+  - `system_prompt_file` or `system_prompt`
+  - `system_prompt_file` must point to a file inside `Agents/`
+  - `features.memory`: `true|false` to enable/disable memory tools/store
+  - `features.history`: `true|false` to enable/disable runtime + prompt history
+  - `modules.tools`: `"all"` or a list of tool names (`TOOL_NAME`)
+  - `modules.dash`: `"all"` or a list of DASH module names (`DASH/<name>.py`)
+
+Included examples:
+
+- `Agents/default.json`: current default runtime behavior
+- `Agents/planificador.json`: planning-focused profile with restricted tools
+
+Switch profile inside the TUI with:
+
+```text
+/agente
+/agente list
+/agente planificador
+/agente default
+```
+
 ## Tool Call Format
 
 The LLM must call tools with:

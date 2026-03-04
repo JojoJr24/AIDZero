@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from agent.models import RuntimeConfig
+from core.models import RuntimeConfig
 
 
 class RuntimeConfigStore:

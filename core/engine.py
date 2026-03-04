@@ -9,13 +9,27 @@ from pathlib import Path
 import re
 from typing import Any, Callable, Iterator, Protocol
 
-from agent.memory import MemoryStore
-from agent.models import ToolCall, ToolExecutionResult, TriggerEvent, TurnResult
-from agent.storage import JsonlStore
-from agent.tooling import ToolRegistry
+from core.memory import MemoryStore
+from core.models import ToolCall, ToolExecutionResult, TriggerEvent, TurnResult
+from core.storage import JsonlStore
+from core.tooling import ToolRegistry
 
 TOOL_CALL_PATTERN = re.compile(r"<AID_TOOL_CALL>\s*(\{.*?\})\s*</AID_TOOL_CALL>", re.DOTALL)
 THINK_PATTERN = re.compile(r"<think>\s*(.*?)\s*</think>", re.DOTALL | re.IGNORECASE)
+LEGACY_TOOL_CALL_PATTERN = re.compile(
+    r"<\s*t\s*o\s*o\s*l\s*_\s*c\s*a\s*l\s*l\s*>(.*?)<\s*/\s*t\s*o\s*o\s*l\s*_\s*c\s*a\s*l\s*l\s*>",
+    re.DOTALL | re.IGNORECASE,
+)
+LEGACY_ARG_KEY_OPEN_PATTERN = re.compile(
+    r"<\s*a\s*r\s*g\s*_\s*k\s*e\s*y\s*>",
+    re.IGNORECASE,
+)
+LEGACY_ARG_PAIR_PATTERN = re.compile(
+    r"<\s*a\s*r\s*g\s*_\s*k\s*e\s*y\s*>(.*?)<\s*/\s*a\s*r\s*g\s*_\s*k\s*e\s*y\s*>"
+    r"\s*"
+    r"<\s*a\s*r\s*g\s*_\s*v\s*a\s*l\s*u\s*e\s*>(.*?)<\s*/\s*a\s*r\s*g\s*_\s*v\s*a\s*l\s*u\s*e\s*>",
+    re.DOTALL | re.IGNORECASE,
+)
 
 
 class LLMCompleter(Protocol):
@@ -31,6 +45,7 @@ class _ToolCallStreamFilter:
 
     _BLOCKS = (
         ("<AID_TOOL_CALL>", "</AID_TOOL_CALL>"),
+        ("<tool_call>", "</tool_call>"),
         ("<think>", "</think>"),
     )
 
@@ -157,6 +172,8 @@ class AgentEngine:
         history_store: JsonlStore,
         memory_store: MemoryStore,
         output_store: JsonlStore,
+        system_prompt_override: str | None = None,
+        history_enabled: bool = True,
     ) -> None:
         self.repo_root = repo_root.resolve()
         self.llm = llm
@@ -164,6 +181,8 @@ class AgentEngine:
         self.history_store = history_store
         self.memory_store = memory_store
         self.output_store = output_store
+        self.system_prompt_override = (system_prompt_override or "").strip() or None
+        self.history_enabled = history_enabled
 
     def run_event(
         self,
@@ -400,6 +419,8 @@ class AgentEngine:
         ]
 
     def _build_conversation_messages(self, event: TriggerEvent, *, max_turns: int = 12) -> list[dict[str, str]]:
+        if not self.history_enabled:
+            return []
         rows = self.history_store.tail(200)
         turns: list[tuple[str, str]] = []
         for row in rows:
@@ -461,14 +482,17 @@ class AgentEngine:
         ]
 
     def _load_system_prompt(self) -> str:
-        custom_prompt_path = self.repo_root / "agent" / "system_prompt.md"
+        if self.system_prompt_override:
+            return self.system_prompt_override
+
+        custom_prompt_path = self.repo_root / "core" / "system_prompt.md"
         if custom_prompt_path.is_file():
             text = custom_prompt_path.read_text(encoding="utf-8", errors="replace").strip()
             if text:
                 return text
 
         return (
-            "You are the AIDZero runtime agent.\n"
+            "You are the AIDZero runtime core.\n"
             "Architecture constraints:\n"
             "- Inputs come from a gateway (heartbeat/cron/messengers/webhooks/interactive).\n"
             "- Every turn includes system prompt + tool schemas.\n"
@@ -482,25 +506,62 @@ class AgentEngine:
 
     def _extract_tool_call(self, assistant_text: str) -> ToolCall | None:
         match = TOOL_CALL_PATTERN.search(assistant_text)
-        if match is None:
+        if match is not None:
+            raw_json = match.group(1)
+            try:
+                payload = json.loads(raw_json)
+            except json.JSONDecodeError:
+                return None
+            if not isinstance(payload, dict):
+                return None
+
+            name = payload.get("name")
+            arguments = payload.get("arguments", {})
+            if not isinstance(name, str) or not name.strip():
+                return None
+            if not isinstance(arguments, dict):
+                arguments = {"raw": arguments}
+            return ToolCall(name=name.strip(), arguments=arguments, raw_block=match.group(0))
+
+        legacy_match = LEGACY_TOOL_CALL_PATTERN.search(assistant_text)
+        if legacy_match is None:
             return None
 
-        raw_json = match.group(1)
-        try:
-            payload = json.loads(raw_json)
-        except json.JSONDecodeError:
-            return None
-        if not isinstance(payload, dict):
+        body = legacy_match.group(1)
+        first_arg_match = LEGACY_ARG_KEY_OPEN_PATTERN.search(body)
+        if first_arg_match is None:
+            name_text = body
+        else:
+            name_text = body[: first_arg_match.start()]
+        name = " ".join(name_text.split()).strip()
+        if not name:
             return None
 
-        name = payload.get("name")
-        arguments = payload.get("arguments", {})
-        if not isinstance(name, str) or not name.strip():
-            return None
-        if not isinstance(arguments, dict):
-            arguments = {"raw": arguments}
+        arguments: dict[str, Any] = {}
+        for arg_match in LEGACY_ARG_PAIR_PATTERN.finditer(body):
+            key = arg_match.group(1).strip()
+            raw_value = arg_match.group(2).strip()
+            if not key:
+                continue
+            arguments[key] = self._coerce_legacy_arg_value(raw_value)
 
-        return ToolCall(name=name.strip(), arguments=arguments, raw_block=match.group(0))
+        return ToolCall(name=name, arguments=arguments, raw_block=legacy_match.group(0))
+
+    @staticmethod
+    def _coerce_legacy_arg_value(raw_value: str) -> Any:
+        if not raw_value:
+            return ""
+        looks_like_json = (
+            raw_value[0] in {'{', '[', '"'}
+            or raw_value in {"true", "false", "null"}
+            or re.fullmatch(r"-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?", raw_value) is not None
+        )
+        if looks_like_json:
+            try:
+                return json.loads(raw_value)
+            except json.JSONDecodeError:
+                return raw_value
+        return raw_value
 
     @staticmethod
     def _tool_call_signature(tool_call: ToolCall) -> str:
@@ -527,19 +588,20 @@ class AgentEngine:
 
     def _persist_turn(self, turn: TurnResult) -> None:
         now = datetime.now(UTC).replace(microsecond=0).isoformat()
-        history_row = {
-            "timestamp": now,
-            "event": {
-                "kind": turn.event.kind,
-                "source": turn.event.source,
-                "prompt": turn.event.prompt,
-                "metadata": turn.event.metadata,
-            },
-            "response": turn.response,
-            "rounds": turn.rounds,
-            "used_tools": turn.used_tools,
-        }
-        self.history_store.append(history_row)
+        if self.history_enabled:
+            history_row = {
+                "timestamp": now,
+                "event": {
+                    "kind": turn.event.kind,
+                    "source": turn.event.source,
+                    "prompt": turn.event.prompt,
+                    "metadata": turn.event.metadata,
+                },
+                "response": turn.response,
+                "rounds": turn.rounds,
+                "used_tools": turn.used_tools,
+            }
+            self.history_store.append(history_row)
 
         output_row = {
             "timestamp": now,

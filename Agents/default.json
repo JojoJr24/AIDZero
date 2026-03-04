@@ -1,0 +1,13 @@
+{
+  "name": "default",
+  "description": "Perfil base del runtime actual.",
+  "system_prompt_file": "system_prompt.md",
+  "features": {
+    "memory": true,
+    "history": true
+  },
+  "modules": {
+    "tools": "all",
+    "dash": "all"
+  }
+}

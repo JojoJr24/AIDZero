@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import json
 
-from agent.engine import AgentEngine
-from agent.memory import MemoryStore
-from agent.models import TriggerEvent
-from agent.storage import JsonlStore
-from agent.tooling import ToolRegistry
+from core.engine import AgentEngine
+from core.memory import MemoryStore
+from core.models import TriggerEvent
+from core.storage import JsonlStore
+from core.tooling import ToolRegistry
 
 
 class FakeLLM:
@@ -155,10 +155,10 @@ def test_engine_adds_linux_details_in_system_message(tmp_path, monkeypatch):
         parameters={"type": "object"},
         execute=lambda args: {"echo": args.get("value")},
     )
-    monkeypatch.setattr("agent.engine.platform.system", lambda: "Linux")
-    monkeypatch.setattr("agent.engine.platform.release", lambda: "6.8.0-test")
+    monkeypatch.setattr("core.engine.platform.system", lambda: "Linux")
+    monkeypatch.setattr("core.engine.platform.release", lambda: "6.8.0-test")
     monkeypatch.setattr(
-        "agent.engine.platform.freedesktop_os_release",
+        "core.engine.platform.freedesktop_os_release",
         lambda: {"NAME": "Ubuntu", "VERSION_ID": "24.04"},
     )
 
@@ -337,6 +337,70 @@ def test_engine_breaks_repeated_identical_tool_call_loop(tmp_path):
 
     assert "repeated identical tool call detected" in result.response
     assert result.rounds == 3
+
+
+def test_engine_executes_legacy_tool_call_format(tmp_path):
+    history_store = JsonlStore(tmp_path / ".aidzero" / "store" / "history.jsonl")
+    output_store = JsonlStore(tmp_path / ".aidzero" / "store" / "output.jsonl")
+    memory = MemoryStore(tmp_path / ".aidzero" / "memory.json")
+    tools = ToolRegistry()
+    tools.register(
+        name="echo",
+        description="Echo tool",
+        parameters={"type": "object"},
+        execute=lambda args: {"echo": args.get("value")},
+    )
+    llm = SequentialLLM(
+        [
+            "<tool_call>echo<arg_key>value</arg_key><arg_value>ok</arg_value></tool_call>",
+            "Final legacy answer",
+        ]
+    )
+    engine = AgentEngine(
+        repo_root=tmp_path,
+        llm=llm,
+        tools=tools,
+        history_store=history_store,
+        memory_store=memory,
+        output_store=output_store,
+    )
+
+    result = engine.run_event(TriggerEvent(kind="interactive", source="test", prompt="legacy"))
+
+    assert result.used_tools == ["echo"]
+    assert result.response == "Final legacy answer"
+
+
+def test_engine_executes_legacy_tool_call_with_wrapped_tag_name(tmp_path):
+    history_store = JsonlStore(tmp_path / ".aidzero" / "store" / "history.jsonl")
+    output_store = JsonlStore(tmp_path / ".aidzero" / "store" / "output.jsonl")
+    memory = MemoryStore(tmp_path / ".aidzero" / "memory.json")
+    tools = ToolRegistry()
+    tools.register(
+        name="echo",
+        description="Echo tool",
+        parameters={"type": "object"},
+        execute=lambda args: {"echo": args.get("value")},
+    )
+    llm = SequentialLLM(
+        [
+            "<too\nl_call>echo<arg_key>value</arg_key><arg_value>ok</arg_value></too\nl_call>",
+            "Final wrapped answer",
+        ]
+    )
+    engine = AgentEngine(
+        repo_root=tmp_path,
+        llm=llm,
+        tools=tools,
+        history_store=history_store,
+        memory_store=memory,
+        output_store=output_store,
+    )
+
+    result = engine.run_event(TriggerEvent(kind="interactive", source="test", prompt="legacy wrapped"))
+
+    assert result.used_tools == ["echo"]
+    assert result.response == "Final wrapped answer"
 
 
 def test_engine_handles_snapshot_stream_without_duplication(tmp_path):

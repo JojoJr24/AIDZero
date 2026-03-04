@@ -9,7 +9,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from agent.ui_runtime import build_ui_runtime
+from core.ui_runtime import build_ui_runtime
 from UI.tui.app import TUIApp
 
 
@@ -36,5 +36,7 @@ def run_ui(
         engine=runtime.engine,
         gateway=runtime.gateway,
         history=runtime.history,
+        agent_manager=runtime.agent_manager,
+        agent_profile=runtime.agent_profile,
     )
     return app.run(request=user_request, trigger=trigger)

@@ -10,9 +10,9 @@ import inspect
 from pathlib import Path
 from types import ModuleType
 
-from agent.models import RuntimeConfig
-from agent.runtime_config import RuntimeConfigStore
-from agent.ui_registry import UIRegistry
+from core.models import RuntimeConfig
+from core.runtime_config import RuntimeConfigStore
+from core.ui_registry import UIRegistry
 
 
 @dataclass(frozen=True)
