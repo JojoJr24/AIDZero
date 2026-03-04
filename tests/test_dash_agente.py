@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from DASH import agente
+from DASH import agent
 
 
 class _Profile:
@@ -47,7 +47,7 @@ class _App:
 def test_agente_lists_profiles():
     app = _App()
 
-    handled = agente.run("/agente", app=app)
+    handled = agent.run("/agent", app=app)
 
     assert handled is True
     assert any("default (activo)" in line for line in app.lines)
@@ -57,10 +57,10 @@ def test_agente_lists_profiles():
 def test_agente_switches_profile():
     app = _App()
 
-    handled = agente.run("/agente planificador", app=app)
+    handled = agent.run("/agent planificador", app=app)
 
     assert handled is True
     assert app.switched == "planificador"
-    assert any("Agente activo: planificador" in line for line in app.lines)
+    assert any("agent activo: planificador" in line for line in app.lines)
     assert any("- memory: on" in line for line in app.lines)
     assert any("- history: on" in line for line in app.lines)

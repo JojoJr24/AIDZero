@@ -10,54 +10,25 @@ import inspect
 from pathlib import Path
 from types import ModuleType
 
+from core.agents import AgentProfileManager
 from core.models import RuntimeConfig
-from core.runtime_config import RuntimeConfigStore
 from core.ui_registry import UIRegistry
 
 
 @dataclass(frozen=True)
 class CliArgs:
     request: str | None
-    ui: str | None
-    provider: str | None
-    model: str | None
-    trigger: str
-    reconfigure: bool
-    list_options: bool
-    ui_options: list[str]
+    agent: str | None
 
 
 def _parse_args() -> CliArgs:
     parser = argparse.ArgumentParser(description="AIDZero runtime launcher.")
     parser.add_argument("--request", help="Prompt to process.")
-    parser.add_argument("--ui", default=None, help="UI runtime (default: terminal).")
-    parser.add_argument("--provider", default=None, help="Provider folder in LLMProviders/.")
-    parser.add_argument("--model", default=None, help="Model name.")
-    parser.add_argument(
-        "--trigger",
-        default="interactive",
-        choices=["interactive", "heartbeat", "cron", "messengers", "webhooks", "all"],
-        help="Gateway trigger source to consume.",
-    )
-    parser.add_argument("--reconfigure", action="store_true", help="Ask and persist runtime choices.")
-    parser.add_argument("--list-options", action="store_true", help="List UI and provider options.")
-    parser.add_argument(
-        "--ui-option",
-        action="append",
-        default=[],
-        metavar="KEY=VALUE",
-        help="UI option passed through to selected UI.",
-    )
+    parser.add_argument("--agent", default=None, help="Agent profile name from Agents/*.json.")
     parsed = parser.parse_args()
     return CliArgs(
         request=parsed.request,
-        ui=parsed.ui,
-        provider=parsed.provider,
-        model=parsed.model,
-        trigger=parsed.trigger,
-        reconfigure=parsed.reconfigure,
-        list_options=parsed.list_options,
-        ui_options=parsed.ui_option,
+        agent=parsed.agent,
     )
 
 
@@ -217,37 +188,6 @@ def _pick_model_for_provider(repo_root: Path, provider_name: str) -> str:
         print("Invalid selection.")
 
 
-def _ensure_runtime_config(
-    *,
-    repo_root: Path,
-    store: RuntimeConfigStore,
-    ui_options: list[str],
-    force_reconfigure: bool,
-) -> tuple[RuntimeConfig, dict[str, str]]:
-    ui_registry = UIRegistry(repo_root)
-    ui_names = ui_registry.names()
-    provider_names = _discover_providers(repo_root)
-
-    if not ui_names:
-        raise RuntimeError("No runnable UI found under UI/<name>/entrypoint.py")
-    if not provider_names:
-        raise RuntimeError("No providers found under LLMProviders/<name>/provider.py")
-
-    loaded = None if force_reconfigure else store.load()
-    if loaded and loaded.ui in ui_names and loaded.provider in provider_names:
-        options = _parse_ui_options(ui_options, trigger="interactive")
-        return loaded, options
-
-    ui = _pick("Select UI:", ui_names, default="terminal")
-    provider = _pick("Select provider:", provider_names)
-    model = _pick_model_for_provider(repo_root, provider)
-
-    config = RuntimeConfig(ui=ui, provider=provider, model=model)
-    store.save(config)
-    options = _parse_ui_options(ui_options, trigger="interactive")
-    return config, options
-
-
 def main() -> int:
     args = _parse_args()
     repo_root = Path(__file__).resolve().parent
@@ -256,27 +196,21 @@ def main() -> int:
     ui_names = ui_registry.names()
     provider_names = _discover_providers(repo_root)
 
-    if args.list_options:
-        print("UI options:")
-        for ui_name in ui_names:
-            print(f"- {ui_name}")
-        print("Provider options:")
-        for provider_name in provider_names:
-            print(f"- {provider_name}")
-        return 0
-
-    store = RuntimeConfigStore(repo_root)
-
-    if args.ui and args.provider and args.model:
-        config = RuntimeConfig(ui=args.ui.strip(), provider=args.provider.strip(), model=args.model.strip())
-        store.save(config)
+    profile_manager = AgentProfileManager(repo_root)
+    if args.agent and args.agent.strip():
+        try:
+            active_profile = profile_manager.set_active_profile(args.agent.strip())
+        except Exception as error:  # noqa: BLE001
+            print(f"error> {error}")
+            return 2
     else:
-        config, _ = _ensure_runtime_config(
-            repo_root=repo_root,
-            store=store,
-            ui_options=args.ui_options,
-            force_reconfigure=args.reconfigure,
-        )
+        active_profile = profile_manager.get_active_profile()
+
+    config = RuntimeConfig(
+        ui=active_profile.runtime_ui,
+        provider=active_profile.runtime_provider,
+        model=active_profile.runtime_model,
+    )
 
     if config.ui not in ui_names:
         print(f"error> unknown ui '{config.ui}'")
@@ -285,17 +219,12 @@ def main() -> int:
         print(f"error> unknown provider '{config.provider}'")
         return 2
 
-    try:
-        parsed_ui_options = _parse_ui_options(args.ui_options, args.trigger)
-    except ValueError as error:
-        print(f"error> {error}")
-        return 2
-
     print("Active runtime:")
     print(f"- ui: {config.ui}")
     print(f"- provider: {config.provider}")
     print(f"- model: {config.model}")
-    print(f"- trigger: {args.trigger}")
+    print("- trigger: interactive")
+    print(f"- agent: {active_profile.name}")
 
     return ui_registry.run(
         config.ui,
@@ -303,7 +232,7 @@ def main() -> int:
         model=config.model,
         user_request=args.request,
         repo_root=repo_root,
-        ui_options=parsed_ui_options,
+        ui_options={"trigger": "interactive"},
     )
 
 

@@ -8,11 +8,7 @@ This repository contains a modular LLM agent runtime built for AIDZero.
   - UIs are loaded dynamically from `UI/<name>/entrypoint.py`
   - each UI entrypoint exposes `run_ui(...)`
 - **Gateway triggers**
-  - `heartbeat` from `HEARTBEAT.md`
-  - `cron` from `.aidzero/cron_prompt.txt`
-  - `messengers` inbox from `.aidzero/inbox/messages.jsonl`
-  - `webhooks` inbox from `.aidzero/inbox/webhooks.jsonl`
-  - `interactive` prompts from terminal UI
+  - `interactive` prompts from terminal/TUI
 - **Injected every turn**
   - system prompt
   - tool schemas
@@ -38,33 +34,34 @@ This repository contains a modular LLM agent runtime built for AIDZero.
 uv run AIDZero.py --list-options
 uv run AIDZero.py --provider openai --model gpt-4o-mini --ui terminal
 uv run AIDZero.py --provider openai --model gpt-4o-mini --ui terminal --request "Summarize repo"
-uv run AIDZero.py --provider openai --model gpt-4o-mini --ui terminal --trigger all
+uv run AIDZero.py --request "Summarize repo"
 ```
 
-## Trigger Setup (TUI)
+## Split UI/Core (different port or IP)
 
-From the TUI you can configure trigger integrations with `/setup`:
-
-```text
-/setup cron */5 * * * *
-/setup heartbeat */1 * * * *
-/setup message-origin zendesk .aidzero/inbox/zendesk.jsonl
-/setup webhook-origin stripe .aidzero/inbox/stripe.jsonl
-/setup show
-```
-
-This generates:
-
-- `.aidzero/scripts/run_cron.sh`
-- `.aidzero/scripts/run_heartbeat.sh`
-- `.aidzero/setup/aidzero.crontab`
-- `.aidzero/setup/install_cron.sh`
-- `.aidzero/trigger_sources.json`
-
-Install cron jobs with:
+Three launchers are now available:
 
 ```bash
-bash .aidzero/setup/install_cron.sh
+# 1) Core only
+uv run aidzero-core --agent default --host 0.0.0.0 --port 8765
+
+# 2) UI only (connects to an existing core)
+uv run aidzero-ui --ui terminal --core-url http://127.0.0.1:8765
+uv run aidzero-ui --ui tui --core-url http://192.168.1.20:8765
+
+# 3) All-in-one launcher (starts core + UI as separate processes)
+uv run aidzero-all --ui terminal --agent default --host 127.0.0.1 --port 8765
+```
+
+`aidzero-all` starts `core` first, waits for `/health`, then launches the selected UI connected through `core_url`.
+
+## Runtime Setup (TUI)
+
+From the TUI you can inspect/update runtime values in the active profile:
+
+```text
+/setup show
+/setup runtime terminal openai gpt-4o-mini
 ```
 
 ## Agent Profiles (`Agents/*.json`)
@@ -74,6 +71,7 @@ bash .aidzero/setup/install_cron.sh
 - Each profile can define:
   - `system_prompt_file` or `system_prompt`
   - `system_prompt_file` must point to a file inside `Agents/`
+  - `runtime.ui`, `runtime.provider`, `runtime.model`
   - `features.memory`: `true|false` to enable/disable memory tools/store
   - `features.history`: `true|false` to enable/disable runtime + prompt history
   - `modules.tools`: `"all"` or a list of tool names (`TOOL_NAME`)
@@ -87,10 +85,10 @@ Included examples:
 Switch profile inside the TUI with:
 
 ```text
-/agente
-/agente list
-/agente planificador
-/agente default
+/agent
+/agent list
+/agent planificador
+/agent default
 ```
 
 ## Tool Call Format

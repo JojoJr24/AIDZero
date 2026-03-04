@@ -179,7 +179,7 @@ class _TextualTUI(App[int]):
         yield _PromptTextArea(
             "",
             id="input",
-            placeholder="Type a prompt or /trigger <name>, /history, /exit",
+            placeholder="Type a prompt, /history, /exit",
             soft_wrap=True,
             show_line_numbers=False,
         )
@@ -190,7 +190,7 @@ class _TextualTUI(App[int]):
         self._resize_input_to_content()
         self.query_one("#input", TextArea).focus()
         if self.initial_request:
-            self._queue_prompt(self.initial_request, trigger=self.active_trigger)
+            self._queue_prompt(self.initial_request)
 
     def _submit_input_text(self) -> None:
         input_widget = self.query_one("#input", TextArea)
@@ -212,7 +212,7 @@ class _TextualTUI(App[int]):
             return
         if self._handle_command(raw):
             return
-        self._queue_prompt(raw, trigger=self.active_trigger)
+        self._queue_prompt(raw)
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
         if event.text_area.id != "input":
@@ -327,10 +327,15 @@ class _TextualTUI(App[int]):
     def _update_status(self) -> None:
         status = self.query_one("#status", Static)
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        status.update(f"agente={self.agent_profile.name}  trigger={self.active_trigger}  time={now}")
+        status.update(f"agent={self.agent_profile.name}  trigger=interactive  time={now}")
 
     def switch_agent_profile(self, profile_name: str) -> AgentProfile:
         profile = self.agent_manager.set_active_profile(profile_name)
+        if bool(getattr(self.agent_manager, "is_remote", False)):
+            self.agent_profile = profile
+            self._hide_command_selector()
+            self._update_status()
+            return profile
         tools = build_default_tool_registry(
             self.repo_root,
             self.engine.memory_store,
@@ -432,7 +437,7 @@ class _TextualTUI(App[int]):
         completed = self._get_highlighted_completion()
         return completed or raw
 
-    def _queue_prompt(self, prompt: str, *, trigger: str) -> None:
+    def _queue_prompt(self, prompt: str) -> None:
         if self._busy:
             self._append_system_line("Still processing previous request. Please wait.")
             return
@@ -441,14 +446,14 @@ class _TextualTUI(App[int]):
         self._stop_requested = False
         self.history.add_prompt(prompt)
         self.run_worker(
-            lambda: self._process_prompt_worker(prompt, trigger),
+            lambda: self._process_prompt_worker(prompt),
             thread=True,
             group="prompt",
             exclusive=True,
         )
 
-    def _process_prompt_worker(self, prompt: str, trigger: str) -> None:
-        events = self.gateway.collect(trigger=trigger, prompt=prompt)
+    def _process_prompt_worker(self, prompt: str) -> None:
+        events = self.gateway.collect(trigger="interactive", prompt=prompt)
         if not events:
             self.call_from_thread(self._append_system_line, "No events available for current trigger.")
             self.call_from_thread(self._mark_idle)
@@ -467,7 +472,17 @@ class _TextualTUI(App[int]):
             def _on_artifact(payload: dict[str, Any]) -> None:
                 self.call_from_thread(self._append_artifact, response_id, payload)
 
-            result = self.engine.run_event(event, on_stream=_on_stream, on_artifact=_on_artifact)
+            try:
+                result = self.engine.run_event(event, on_stream=_on_stream, on_artifact=_on_artifact)
+            except Exception as error:  # noqa: BLE001
+                self.call_from_thread(
+                    self._finish_response,
+                    response_id,
+                    0,
+                    0,
+                    f"Provider/core error: {error}",
+                )
+                continue
             self.call_from_thread(
                 self._finish_response,
                 response_id,

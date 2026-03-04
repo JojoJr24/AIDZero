@@ -19,6 +19,9 @@ class AgentProfile:
     enabled_dash_modules: list[str] | None
     memory_enabled: bool
     history_enabled: bool
+    runtime_ui: str
+    runtime_provider: str
+    runtime_model: str
     source_path: Path
 
 
@@ -110,6 +113,10 @@ class AgentProfileManager:
             key="history",
             filename=path.name,
         )
+        runtime_ui, runtime_provider, runtime_model = self._parse_runtime_config(
+            payload.get("runtime"),
+            filename=path.name,
+        )
 
         return AgentProfile(
             name=profile_name,
@@ -119,6 +126,9 @@ class AgentProfileManager:
             enabled_dash_modules=enabled_dash_modules,
             memory_enabled=memory_enabled,
             history_enabled=history_enabled,
+            runtime_ui=runtime_ui,
+            runtime_provider=runtime_provider,
+            runtime_model=runtime_model,
             source_path=path,
         )
 
@@ -166,6 +176,17 @@ class AgentProfileManager:
         if isinstance(raw, bool):
             return raw
         raise RuntimeError(f"Invalid features.{key} in {filename}: expected boolean.")
+
+    def _parse_runtime_config(self, raw: Any, *, filename: str) -> tuple[str, str, str]:
+        if not isinstance(raw, dict):
+            raise RuntimeError(f"Invalid runtime in {filename}: expected object with ui/provider/model.")
+
+        ui = str(raw.get("ui", "")).strip()
+        provider = str(raw.get("provider", "")).strip()
+        model = str(raw.get("model", "")).strip()
+        if not ui or not provider or not model:
+            raise RuntimeError(f"Invalid runtime in {filename}: ui/provider/model are required non-empty strings.")
+        return ui, provider, model
 
     def _load_state_name(self) -> str | None:
         if not self.state_path.exists():

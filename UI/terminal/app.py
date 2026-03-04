@@ -28,11 +28,11 @@ class TerminalApp:
     def run(self, *, request: str | None, trigger: str) -> int:
         if request and request.strip():
             self.history.add_prompt(request)
-            events = self.gateway.collect(trigger=trigger, prompt=request)
+            events = self.gateway.collect(trigger="interactive", prompt=request)
             return self._run_events(events)
 
         print("AIDZero Terminal UI")
-        print("Commands: /exit, /history, /heartbeat, /cron, /all")
+        print("Commands: /exit, /history")
 
         while True:
             try:
@@ -47,25 +47,15 @@ class TerminalApp:
             if message in {"/exit", "/quit"}:
                 return 0
 
-            run_trigger = "interactive"
             run_prompt = message
             if message == "/history":
                 self._print_history()
                 continue
-            if message == "/heartbeat":
-                run_trigger = "heartbeat"
-                run_prompt = ""
-            elif message == "/cron":
-                run_trigger = "cron"
-                run_prompt = ""
-            elif message == "/all":
-                run_trigger = "all"
-                run_prompt = ""
 
             if run_prompt:
                 self.history.add_prompt(run_prompt)
 
-            events = self.gateway.collect(trigger=run_trigger, prompt=run_prompt)
+            events = self.gateway.collect(trigger="interactive", prompt=run_prompt)
             if not events:
                 print("No events available for that trigger.")
                 continue
@@ -86,6 +76,10 @@ class TerminalApp:
     def _run_events(self, events) -> int:
         for event in events:
             print(f"\n[{event.kind}] {event.source}")
-            result = self.engine.run_event(event)
+            try:
+                result = self.engine.run_event(event)
+            except Exception as error:  # noqa: BLE001
+                print(f"Provider/core error: {error}")
+                continue
             print(result.response)
         return 0

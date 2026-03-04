@@ -494,7 +494,7 @@ class AgentEngine:
         return (
             "You are the AIDZero runtime core.\n"
             "Architecture constraints:\n"
-            "- Inputs come from a gateway (heartbeat/cron/messengers/webhooks/interactive).\n"
+            "- Inputs come from a gateway (interactive).\n"
             "- Every turn includes system prompt + tool schemas.\n"
             "- Do not assume prior history; use history_get when the user asks about past turns.\n"
             "- Memory is never injected automatically; use memory tools to read/write it.\n"

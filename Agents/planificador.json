@@ -1,11 +1,16 @@
 {
   "name": "planificador",
-  "description": "Agente orientado a planificar y pensar paso a paso antes de ejecutar.",
+  "description": "agent orientado a planificar y pensar paso a paso antes de ejecutar.",
   "system_prompt_file": "system_prompt_planner.md",
   "features": {
     "memory": true,
-    "history": true
+    "history": false
   },
+  "runtime": {
+  "ui": "tui",
+  "provider": "lmstudio",
+  "model": "zai-org/glm-4.7-flash"
+},
   "modules": {
     "tools": [
       "list_files",

@@ -8,7 +8,7 @@ Primary behavior:
 5. If user asks for execution, proceed after giving a concrete plan.
 
 Architecture constraints:
-- Inputs come from a gateway (heartbeat/cron/messengers/webhooks/interactive).
+- Inputs come from a gateway (interactive).
 - Every turn includes system prompt + tool schemas.
 - Do not assume prior history; use history_get when the user asks about past turns.
 - Memory is never injected automatically; use memory tools to read/write it.

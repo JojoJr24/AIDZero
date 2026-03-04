@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 DASH_COMMANDS = [
-    {"command": "/agente", "description": "Lista agentes disponibles y activo"},
-    {"command": "/agente <nombre>", "description": "Cambia el agente activo"},
-    {"command": "/agente list", "description": "Lista agentes disponibles"},
+    {"command": "/agent", "description": "Lista agentes disponibles y activo"},
+    {"command": "/agent <nombre>", "description": "Cambia el agent activo"},
+    {"command": "/agent list", "description": "Lista agentes disponibles"},
 ]
 
 
 def match(raw: str) -> bool:
     text = raw.strip().lower()
-    return text == "/agente" or text.startswith("/agente ")
+    return text == "/agent" or text.startswith("/agent ")
 
 
 def run(raw: str, *, app) -> bool:
@@ -23,7 +23,7 @@ def run(raw: str, *, app) -> bool:
     profile = getattr(app, "agent_profile", None)
 
     if manager is None:
-        _line(app, "Este UI no soporta perfiles de agente.")
+        _line(app, "Este UI no soporta perfiles de agent.")
         return True
 
     if not arg or arg.lower() in {"list", "ls"}:
@@ -36,17 +36,17 @@ def run(raw: str, *, app) -> bool:
         for name in names:
             marker = " (activo)" if name == active_name else ""
             _line(app, f"- {name}{marker}")
-        _line(app, "Uso: /agente <nombre>")
+        _line(app, "Uso: /agent <nombre>")
         return True
 
     target = arg.split()[0].strip()
     if not target:
-        _line(app, "Uso: /agente <nombre>")
+        _line(app, "Uso: /agent <nombre>")
         return True
 
     switcher = getattr(app, "switch_agent_profile", None)
     if not callable(switcher):
-        _line(app, "Este UI no permite cambiar de agente en caliente.")
+        _line(app, "Este UI no permite cambiar de agent en caliente.")
         return True
 
     try:
@@ -59,7 +59,7 @@ def run(raw: str, *, app) -> bool:
     dash = ", ".join(selected.enabled_dash_modules) if selected.enabled_dash_modules else "all"
     memory = "on" if getattr(selected, "memory_enabled", True) else "off"
     history = "on" if getattr(selected, "history_enabled", True) else "off"
-    _line(app, f"Agente activo: {selected.name}")
+    _line(app, f"agent activo: {selected.name}")
     _line(app, f"- tools: {tools}")
     _line(app, f"- dash: {dash}")
     _line(app, f"- memory: {memory}")

@@ -6,6 +6,11 @@
     "memory": true,
     "history": true
   },
+  "runtime": {
+  "ui": "tui",
+  "provider": "lmstudio",
+  "model": "zai-org/glm-4.7-flash"
+},
   "modules": {
     "tools": "all",
     "dash": "all"
