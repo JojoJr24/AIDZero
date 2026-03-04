@@ -12,15 +12,15 @@ This repository contains a modular LLM agent runtime built for AIDZero.
 - **Injected every turn**
   - system prompt
   - tool schemas
-  - JSONL history
-  - memory snapshot
+- **Not injected automatically**
+  - history and memory (agent must call `history_get` / memory tools explicitly)
 - **Tool runtime**
   - tools are loaded dynamically from `TOOLS/*.py` (one `.py` file per tool)
   - sandbox command execution
   - file read/write/list tools
   - persistent memory tools
   - computer-control tool (open_url, type_text, key_press, mouse, screenshot, run)
-  - MCP gateway client tools (`mcp_health`, `mcp_search_tools`, `mcp_describe_tool`, `mcp_call_tool`)
+  - MCP gateway client tools (`mcp_search_tools`, `mcp_describe_tool`, `mcp_call_tool`)
   - skill tools (`list_skills`, `read_skill`, `run_skill_script`)
 - **Outputs**
   - `.aidzero/store/history.jsonl`
@@ -35,6 +35,39 @@ uv run AIDZero.py --list-options
 uv run AIDZero.py --provider openai --model gpt-4o-mini --ui terminal
 uv run AIDZero.py --provider openai --model gpt-4o-mini --ui terminal --request "Summarize repo"
 uv run AIDZero.py --request "Summarize repo"
+```
+
+## Tool Priority (Agent Policy)
+
+When selecting capabilities, the runtime prompts enforce this order:
+
+1. Local tools
+2. Skills
+3. MCP gateway
+
+For MCP, the expected sequence is:
+
+1. `mcp_search_tools`
+2. `mcp_describe_tool`
+3. `mcp_call_tool`
+
+`mcp_search_tools` is a gateway tool catalog lookup, not internet search.
+
+## MCP Gateway (Python)
+
+The MCP gateway now runs in Python from `MCP/tool-gateway/`.
+
+Main files:
+
+- `MCP/run-tool-gateway.sh`
+- `MCP/tool-gateway/gateway_server.py`
+- `MCP/tool-gateway/scripts/gateway-call.py`
+
+Quick checks:
+
+```bash
+bash MCP/run-tool-gateway.sh
+.venv/bin/python MCP/tool-gateway/scripts/gateway-call.py --tool tool_search --payload '{"query":"list available tools","limit":3}'
 ```
 
 ## Split UI/Core (different port or IP)
@@ -96,8 +129,10 @@ Switch profile inside the TUI with:
 The LLM must call tools with:
 
 ```text
-<AID_TOOL_CALL>{"name":"sandbox_run","arguments":{"command":"ls -la"}}</AID_TOOL_CALL>
+<tool_call>{"name":"sandbox_run","arguments":{"command":"ls -la"}}```
 ```
+
+Use only `<tool_call>...</tool_call>` tags for tool invocations.
 
 ## Tool Plugin Contract
 

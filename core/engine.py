@@ -14,8 +14,14 @@ from core.models import ToolCall, ToolExecutionResult, TriggerEvent, TurnResult
 from core.storage import JsonlStore
 from core.tooling import ToolRegistry
 
-TOOL_CALL_PATTERN = re.compile(r"<AID_TOOL_CALL>\s*(\{.*?\})\s*</AID_TOOL_CALL>", re.DOTALL)
+TOOL_CALL_PATTERN = re.compile(
+    r"<\s*tool_call\s*>\s*(\{.*?\})\s*<\s*/\s*tool_call\s*>",
+    re.DOTALL | re.IGNORECASE,
+)
+TOOL_CALL_OPEN_PATTERN = re.compile(r"<\s*tool_call\s*>", re.IGNORECASE)
+TOOL_CALL_CLOSE_PATTERN = re.compile(r"<\s*/\s*tool_call\s*>", re.IGNORECASE)
 THINK_PATTERN = re.compile(r"<think>\s*(.*?)\s*</think>", re.DOTALL | re.IGNORECASE)
+TOOL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]+$")
 LEGACY_TOOL_CALL_PATTERN = re.compile(
     r"<\s*t\s*o\s*o\s*l\s*_\s*c\s*a\s*l\s*l\s*>(.*?)<\s*/\s*t\s*o\s*o\s*l\s*_\s*c\s*a\s*l\s*l\s*>",
     re.DOTALL | re.IGNORECASE,
@@ -29,6 +35,14 @@ LEGACY_ARG_PAIR_PATTERN = re.compile(
     r"\s*"
     r"<\s*a\s*r\s*g\s*_\s*v\s*a\s*l\s*u\s*e\s*>(.*?)<\s*/\s*a\s*r\s*g\s*_\s*v\s*a\s*l\s*u\s*e\s*>",
     re.DOTALL | re.IGNORECASE,
+)
+LEGACY_ARG_TAG_PATTERN = re.compile(
+    r"<\s*/?\s*a\s*r\s*g\s*_\s*[a-z_]+\s*>",
+    re.IGNORECASE,
+)
+LEGACY_INLINE_CALL_PATTERN = re.compile(
+    r"^\s*([A-Za-z0-9_.:-]+)\s*(\{.*\})\s*$",
+    re.DOTALL,
 )
 
 
@@ -44,7 +58,6 @@ class _ToolCallStreamFilter:
     """Streams assistant text while suppressing hidden XML blocks and emitting artifact chunks."""
 
     _BLOCKS = (
-        ("<AID_TOOL_CALL>", "</AID_TOOL_CALL>"),
         ("<tool_call>", "</tool_call>"),
         ("<think>", "</think>"),
     )
@@ -183,6 +196,10 @@ class AgentEngine:
         self.output_store = output_store
         self.system_prompt_override = (system_prompt_override or "").strip() or None
         self.history_enabled = history_enabled
+        self._session_messages: list[dict[str, str]] = []
+
+    def reset_session(self) -> None:
+        self._session_messages.clear()
 
     def run_event(
         self,
@@ -198,6 +215,24 @@ class AgentEngine:
         response_fragments: list[str] = []
         last_tool_signature: str | None = None
         repeated_same_tool_call = 0
+        latest_tool_call_artifact_ids: dict[int, str] = {}
+
+        def _emit_artifact(payload: dict[str, Any]) -> None:
+            if on_artifact is None:
+                return
+            event_name = str(payload.get("event", "")).strip().lower()
+            artifact_type = str(payload.get("type", "")).strip().lower()
+            if event_name == "start" and artifact_type == "tool_call":
+                artifact_id = str(payload.get("artifact_id", "")).strip()
+                if artifact_id:
+                    raw_round = payload.get("round")
+                    try:
+                        round_number = int(raw_round)
+                    except (TypeError, ValueError):
+                        round_number = 0
+                    if round_number > 0:
+                        latest_tool_call_artifact_ids[round_number] = artifact_id
+            on_artifact(payload)
 
         rounds = 0
         while rounds < max_rounds:
@@ -205,13 +240,13 @@ class AgentEngine:
             assistant_text, emitted_artifacts_live = self._complete_assistant(
                 messages,
                 on_stream=on_stream,
-                on_artifact=on_artifact,
+                on_artifact=_emit_artifact if on_artifact is not None else None,
                 round_number=rounds,
             )
             if not emitted_artifacts_live:
                 self._emit_embedded_artifacts(
                     assistant_text,
-                    on_artifact=on_artifact,
+                    on_artifact=_emit_artifact if on_artifact is not None else None,
                     round_number=rounds,
                 )
             tool_call = self._extract_tool_call(assistant_text)
@@ -242,21 +277,32 @@ class AgentEngine:
             used_tools.append(tool_call.name)
 
             tool_result = self._execute_tool(tool_call)
+            tool_result_payload = {
+                "tool_name": tool_result.tool_name,
+                "status": tool_result.status,
+                "payload": tool_result.payload,
+            }
+            tool_result_json = json.dumps(tool_result_payload, ensure_ascii=False, indent=2)
+
+            if on_artifact is not None:
+                tool_artifact_id = latest_tool_call_artifact_ids.get(rounds)
+                if tool_artifact_id:
+                    _emit_artifact(
+                        {
+                            "event": "chunk",
+                            "artifact_id": tool_artifact_id,
+                            "round": rounds,
+                            "content": "\n\nTool response (JSON):\n" + tool_result_json,
+                        }
+                    )
+
             messages.append({"role": "assistant", "content": assistant_text})
             messages.append(
                 {
                     "role": "user",
                     "content": (
                         "Tool response (JSON):\n"
-                        + json.dumps(
-                            {
-                                "tool_name": tool_result.tool_name,
-                                "status": tool_result.status,
-                                "payload": tool_result.payload,
-                            },
-                            ensure_ascii=False,
-                            indent=2,
-                        )
+                        + tool_result_json
                         + "\nContinue with your final user-facing answer."
                     ),
                 }
@@ -278,6 +324,7 @@ class AgentEngine:
             used_tools=used_tools,
         )
         self._persist_turn(turn_result)
+        self._append_session_turn(user_prompt=event.prompt, assistant_response=turn_result.response)
         return turn_result
 
     def _complete_assistant(
@@ -293,6 +340,15 @@ class AgentEngine:
 
         assistant_text = ""
         stream_filter = _ToolCallStreamFilter()
+        emitted_artifacts_live = False
+        artifact_emitter = on_artifact
+        if on_artifact is not None:
+            def _emit_artifact(payload: dict[str, Any]) -> None:
+                nonlocal emitted_artifacts_live
+                emitted_artifacts_live = True
+                on_artifact(payload)
+
+            artifact_emitter = _emit_artifact
         snapshot_mode: bool | None = None
         last_raw_chunk = ""
         same_raw_streak = 0
@@ -322,7 +378,7 @@ class AgentEngine:
             last_raw_chunk = text
             visible = stream_filter.feed(
                 delta,
-                on_artifact=on_artifact,
+                on_artifact=artifact_emitter,
                 round_number=round_number,
             )
             if visible:
@@ -343,7 +399,7 @@ class AgentEngine:
         tail = stream_filter.finalize()
         if tail:
             on_stream(tail)
-        return assistant_text, on_artifact is not None
+        return assistant_text, emitted_artifacts_live
 
     @staticmethod
     def _strip_think_blocks(text: str) -> str:
@@ -394,12 +450,11 @@ class AgentEngine:
     def _build_initial_messages(self, event: TriggerEvent) -> list[dict[str, str]]:
         system_prompt = self._build_system_message()
         tool_schemas = self.tools.schemas()
-        conversation_messages = self._build_conversation_messages(event)
 
         injected_payload = {
             "tool_schemas": tool_schemas,
             "instructions": {
-                "tool_call_format": "<AID_TOOL_CALL>{\"name\":\"tool_name\",\"arguments\":{}}</AID_TOOL_CALL>",
+                "tool_call_format": "<tool_call>{\"name\":\"tool_name\",\"arguments\":{}}</tool_call>",
                 "tool_policy": "When a tool is needed, output exactly one tool-call block and wait.",
             },
         }
@@ -414,36 +469,23 @@ class AgentEngine:
 
         return [
             {"role": "system", "content": system_message},
-            *conversation_messages,
+            *self._session_context_messages(),
             {"role": "user", "content": user_message},
         ]
 
-    def _build_conversation_messages(self, event: TriggerEvent, *, max_turns: int = 12) -> list[dict[str, str]]:
-        if not self.history_enabled:
-            return []
-        rows = self.history_store.tail(200)
-        turns: list[tuple[str, str]] = []
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            event_payload = row.get("event")
-            if not isinstance(event_payload, dict):
-                continue
-            if event_payload.get("kind") != event.kind or event_payload.get("source") != event.source:
-                continue
-            prompt = str(event_payload.get("prompt", "")).strip()
-            response = str(row.get("response", "")).strip()
-            if not prompt or not response:
-                continue
-            turns.append((prompt, response))
-        if max_turns > 0:
-            turns = turns[-max_turns:]
+    def _session_context_messages(self) -> list[dict[str, str]]:
+        return [
+            {"role": item["role"], "content": item["content"]}
+            for item in self._session_messages
+        ]
 
-        messages: list[dict[str, str]] = []
-        for prompt, response in turns:
-            messages.append({"role": "user", "content": prompt})
-            messages.append({"role": "assistant", "content": response})
-        return messages
+    def _append_session_turn(self, *, user_prompt: str, assistant_response: str) -> None:
+        user_text = user_prompt.strip()
+        assistant_text = assistant_response.strip()
+        if user_text:
+            self._session_messages.append({"role": "user", "content": user_text})
+        if assistant_text:
+            self._session_messages.append({"role": "assistant", "content": assistant_text})
 
     def _build_system_message(self) -> str:
         base_prompt = self._load_system_prompt()
@@ -496,10 +538,11 @@ class AgentEngine:
             "Architecture constraints:\n"
             "- Inputs come from a gateway (interactive).\n"
             "- Every turn includes system prompt + tool schemas.\n"
-            "- Do not assume prior history; use history_get when the user asks about past turns.\n"
+            "- Prior turns in the current app session are already included automatically.\n"
+            "- Use history_get only when the user asks about turns from previous sessions/runs.\n"
             "- Memory is never injected automatically; use memory tools to read/write it.\n"
             "- If you need prior context, call memory_list and/or memory_get first.\n"
-            "- You may call tools via <AID_TOOL_CALL> JSON blocks.\n"
+            "- You may call tools via <tool_call> JSON blocks.\n"
             "- Prefer short, actionable final answers.\n"
             "- If you modify memory, explain why in the final answer."
         )
@@ -523,18 +566,24 @@ class AgentEngine:
                 arguments = {"raw": arguments}
             return ToolCall(name=name.strip(), arguments=arguments, raw_block=match.group(0))
 
+        unclosed = self._extract_unclosed_tool_call(assistant_text)
+        if unclosed is not None:
+            return unclosed
+
         legacy_match = LEGACY_TOOL_CALL_PATTERN.search(assistant_text)
         if legacy_match is None:
             return None
 
-        body = legacy_match.group(1)
+        body = legacy_match.group(1).strip()
         first_arg_match = LEGACY_ARG_KEY_OPEN_PATTERN.search(body)
         if first_arg_match is None:
-            name_text = body
-        else:
-            name_text = body[: first_arg_match.start()]
+            return self._parse_legacy_inline_tool_call(
+                body=body,
+                raw_block=legacy_match.group(0),
+            )
+        name_text = body[: first_arg_match.start()]
         name = " ".join(name_text.split()).strip()
-        if not name:
+        if not self._is_valid_tool_name(name):
             return None
 
         arguments: dict[str, Any] = {}
@@ -546,6 +595,72 @@ class AgentEngine:
             arguments[key] = self._coerce_legacy_arg_value(raw_value)
 
         return ToolCall(name=name, arguments=arguments, raw_block=legacy_match.group(0))
+
+    @staticmethod
+    def _is_valid_tool_name(value: str) -> bool:
+        return bool(value and TOOL_NAME_PATTERN.fullmatch(value))
+
+    def _parse_legacy_inline_tool_call(self, *, body: str, raw_block: str) -> ToolCall | None:
+        cleaned_body = LEGACY_ARG_TAG_PATTERN.sub("", body).strip()
+        if not cleaned_body:
+            return None
+
+        inline_match = LEGACY_INLINE_CALL_PATTERN.match(cleaned_body)
+        if inline_match is not None:
+            name = inline_match.group(1).strip()
+            if not self._is_valid_tool_name(name):
+                return None
+            raw_arguments = inline_match.group(2).strip()
+            try:
+                parsed_arguments = json.loads(raw_arguments)
+            except json.JSONDecodeError:
+                return None
+            if isinstance(parsed_arguments, dict):
+                arguments: dict[str, Any] = parsed_arguments
+            else:
+                arguments = {"raw": parsed_arguments}
+            return ToolCall(name=name, arguments=arguments, raw_block=raw_block)
+
+        name = " ".join(cleaned_body.split()).strip()
+        if not self._is_valid_tool_name(name):
+            return None
+        return ToolCall(name=name, arguments={}, raw_block=raw_block)
+
+    def _extract_unclosed_tool_call(self, assistant_text: str) -> ToolCall | None:
+        decoder = json.JSONDecoder()
+        for open_match in TOOL_CALL_OPEN_PATTERN.finditer(assistant_text):
+            payload_start = open_match.end()
+            payload_text = assistant_text[payload_start:].lstrip()
+            if not payload_text:
+                continue
+            leading_ws = len(assistant_text[payload_start:]) - len(payload_text)
+            payload_start += leading_ws
+            try:
+                parsed_payload, offset = decoder.raw_decode(payload_text)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(parsed_payload, dict):
+                continue
+            name = parsed_payload.get("name")
+            arguments = parsed_payload.get("arguments", {})
+            if not isinstance(name, str):
+                continue
+            name = name.strip()
+            if not self._is_valid_tool_name(name):
+                continue
+            if not isinstance(arguments, dict):
+                arguments = {"raw": arguments}
+
+            payload_end = payload_start + offset
+            tail = assistant_text[payload_end:]
+            close_match = TOOL_CALL_CLOSE_PATTERN.match(tail.lstrip())
+            raw_end = payload_end
+            if close_match is not None:
+                leading = len(tail) - len(tail.lstrip())
+                raw_end = payload_end + leading + close_match.end()
+            raw_block = assistant_text[open_match.start() : raw_end]
+            return ToolCall(name=name, arguments=arguments, raw_block=raw_block)
+        return None
 
     @staticmethod
     def _coerce_legacy_arg_value(raw_value: str) -> Any:

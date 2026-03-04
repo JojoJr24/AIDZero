@@ -26,13 +26,14 @@ class TerminalApp:
         self.history = history
 
     def run(self, *, request: str | None, trigger: str) -> int:
+        self._reset_engine_session()
         if request and request.strip():
             self.history.add_prompt(request)
             events = self.gateway.collect(trigger="interactive", prompt=request)
             return self._run_events(events)
 
         print("AIDZero Terminal UI")
-        print("Commands: /exit, /history")
+        print("Commands: /new, /exit, /history")
 
         while True:
             try:
@@ -46,6 +47,10 @@ class TerminalApp:
                 continue
             if message in {"/exit", "/quit"}:
                 return 0
+            if message == "/new":
+                self._reset_engine_session()
+                print("Started a new conversation.")
+                continue
 
             run_prompt = message
             if message == "/history":
@@ -83,3 +88,12 @@ class TerminalApp:
                 continue
             print(result.response)
         return 0
+
+    def _reset_engine_session(self) -> None:
+        reset = getattr(self.engine, "reset_session", None)
+        if not callable(reset):
+            return
+        try:
+            reset()
+        except Exception as error:  # noqa: BLE001
+            print(f"warning> could not reset session: {error}")

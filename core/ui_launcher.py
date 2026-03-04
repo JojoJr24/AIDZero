@@ -6,6 +6,7 @@ from argparse import ArgumentParser
 from pathlib import Path
 from typing import Any
 
+from core.api_client import CoreAPIError
 from core.agents import AgentProfileManager
 from core.ui_registry import UIRegistry
 
@@ -76,14 +77,18 @@ def main() -> int:
     print(f"- core_url: {ui_options['core_url']}")
     print(f"- agent: {active_profile.name}")
 
-    return ui_registry.run(
-        ui_name,
-        provider_name=active_profile.runtime_provider,
-        model=active_profile.runtime_model,
-        user_request=args.request,
-        repo_root=repo_root,
-        ui_options=ui_options,
-    )
+    try:
+        return ui_registry.run(
+            ui_name,
+            provider_name=active_profile.runtime_provider,
+            model=active_profile.runtime_model,
+            user_request=args.request,
+            repo_root=repo_root,
+            ui_options=ui_options,
+        )
+    except CoreAPIError as error:
+        print(f"error> cannot reach core API at {ui_options['core_url']}: {error}")
+        return 2
 
 
 if __name__ == "__main__":

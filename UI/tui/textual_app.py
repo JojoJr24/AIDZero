@@ -137,6 +137,12 @@ class _TextualTUI(App[int]):
     BINDINGS = [
         ("ctrl+q", "quit", "Quit"),
         ("ctrl+s", "stop_generation", "Stop"),
+        ("ctrl+up", "scroll_messages_up", "Scroll Up"),
+        ("ctrl+down", "scroll_messages_down", "Scroll Down"),
+        ("ctrl+pageup", "scroll_messages_page_up", "Page Up"),
+        ("ctrl+pagedown", "scroll_messages_page_down", "Page Down"),
+        ("ctrl+home", "scroll_messages_top", "Top"),
+        ("ctrl+end", "scroll_messages_bottom", "Bottom"),
     ]
 
     def __init__(
@@ -179,13 +185,14 @@ class _TextualTUI(App[int]):
         yield _PromptTextArea(
             "",
             id="input",
-            placeholder="Type a prompt, /history, /exit",
+            placeholder="Type a prompt, /new, /history, /exit",
             soft_wrap=True,
             show_line_numbers=False,
         )
         yield Footer()
 
     def on_mount(self) -> None:
+        self._reset_engine_session()
         self._update_status()
         self._resize_input_to_content()
         self.query_one("#input", TextArea).focus()
@@ -295,6 +302,40 @@ class _TextualTUI(App[int]):
         self._resize_input_to_content()
         event.stop()
 
+    def on_mouse_scroll_up(self, event: events.MouseScrollUp) -> None:
+        self._scroll_messages_lines(-3)
+        event.stop()
+
+    def on_mouse_scroll_down(self, event: events.MouseScrollDown) -> None:
+        self._scroll_messages_lines(3)
+        event.stop()
+
+    def action_scroll_messages_up(self) -> None:
+        self._scroll_messages_lines(-3)
+
+    def action_scroll_messages_down(self) -> None:
+        self._scroll_messages_lines(3)
+
+    def action_scroll_messages_page_up(self) -> None:
+        messages = self.query_one("#messages", VerticalScroll)
+        messages.scroll_page_up(animate=False)
+
+    def action_scroll_messages_page_down(self) -> None:
+        messages = self.query_one("#messages", VerticalScroll)
+        messages.scroll_page_down(animate=False)
+
+    def action_scroll_messages_top(self) -> None:
+        messages = self.query_one("#messages", VerticalScroll)
+        messages.scroll_home(animate=False)
+
+    def action_scroll_messages_bottom(self) -> None:
+        messages = self.query_one("#messages", VerticalScroll)
+        messages.scroll_end(animate=False)
+
+    def _scroll_messages_lines(self, delta: int) -> None:
+        messages = self.query_one("#messages", VerticalScroll)
+        messages.scroll_relative(y=delta, animate=False)
+
     def _resize_input_to_content(self) -> None:
         input_widget = self.query_one("#input", TextArea)
         text = input_widget.text
@@ -323,6 +364,41 @@ class _TextualTUI(App[int]):
         row = Static(f"{datetime.now().strftime('%H:%M:%S')}  {text}", classes="resp-header")
         messages.mount(row)
         messages.scroll_end(animate=False)
+
+    def start_new_conversation(self) -> None:
+        if self._busy:
+            self._stop_requested = True
+            stop_stream = getattr(self.engine.llm, "stop_stream", None)
+            if callable(stop_stream):
+                try:
+                    stop_stream()
+                except Exception:  # noqa: BLE001
+                    pass
+
+        self._responses.clear()
+        self._next_response_id = 1
+        self._hide_command_selector()
+        self._hide_history_selector()
+
+        messages = self.query_one("#messages", VerticalScroll)
+        messages.remove_children()
+
+        input_widget = self.query_one("#input", TextArea)
+        input_widget.clear()
+        self._resize_input_to_content()
+        input_widget.focus()
+
+        self._reset_engine_session()
+        self._append_system_line("Started a new conversation.")
+
+    def _reset_engine_session(self) -> None:
+        reset = getattr(self.engine, "reset_session", None)
+        if not callable(reset):
+            return
+        try:
+            reset()
+        except Exception as error:  # noqa: BLE001
+            self._append_system_line(f"Session reset failed: {error}")
 
     def _update_status(self) -> None:
         status = self.query_one("#status", Static)
@@ -445,54 +521,76 @@ class _TextualTUI(App[int]):
         self._busy = True
         self._stop_requested = False
         self.history.add_prompt(prompt)
-        self.run_worker(
-            lambda: self._process_prompt_worker(prompt),
-            thread=True,
-            group="prompt",
-            exclusive=True,
-        )
+        try:
+            self.run_worker(
+                lambda: self._process_prompt_worker(prompt),
+                thread=True,
+                group="prompt",
+                exclusive=True,
+            )
+        except Exception as error:  # noqa: BLE001
+            self._busy = False
+            self._stop_requested = False
+            self._append_system_line(f"Could not start request worker: {error}")
 
     def _process_prompt_worker(self, prompt: str) -> None:
-        events = self.gateway.collect(trigger="interactive", prompt=prompt)
-        if not events:
-            self.call_from_thread(self._append_system_line, "No events available for current trigger.")
-            self.call_from_thread(self._mark_idle)
-            return
+        try:
+            events = self.gateway.collect(trigger="interactive", prompt=prompt)
+            if not events:
+                self.call_from_thread(
+                    self._append_system_line,
+                    "No events available for current trigger.",
+                )
+                return
 
-        for event in events:
-            if self._stop_requested:
-                break
-            response_id = self._next_response_id
-            self._next_response_id += 1
-            self.call_from_thread(self._create_response_block, response_id, event.kind, event.source)
+            for event in events:
+                if self._stop_requested:
+                    break
+                response_id = self._next_response_id
+                self._next_response_id += 1
+                self.call_from_thread(self._create_response_block, response_id, event.kind, event.source)
 
-            def _on_stream(chunk: str) -> None:
-                self.call_from_thread(self._append_stream, response_id, chunk)
+                def _on_stream(chunk: str) -> None:
+                    self.call_from_thread(self._append_stream, response_id, chunk)
 
-            def _on_artifact(payload: dict[str, Any]) -> None:
-                self.call_from_thread(self._append_artifact, response_id, payload)
+                def _on_artifact(payload: dict[str, Any]) -> None:
+                    self.call_from_thread(self._append_artifact, response_id, payload)
 
-            try:
-                result = self.engine.run_event(event, on_stream=_on_stream, on_artifact=_on_artifact)
-            except Exception as error:  # noqa: BLE001
+                try:
+                    result = self.engine.run_event(event, on_stream=_on_stream, on_artifact=_on_artifact)
+                except Exception as error:  # noqa: BLE001
+                    self.call_from_thread(
+                        self._finish_response,
+                        response_id,
+                        0,
+                        0,
+                        f"Provider/core error: {error}",
+                    )
+                    continue
                 self.call_from_thread(
                     self._finish_response,
                     response_id,
-                    0,
-                    0,
-                    f"Provider/core error: {error}",
+                    result.rounds,
+                    len(result.used_tools),
+                    result.response,
                 )
-                continue
-            self.call_from_thread(
-                self._finish_response,
-                response_id,
-                result.rounds,
-                len(result.used_tools),
-                result.response,
-            )
-            if self._stop_requested:
-                break
-        self.call_from_thread(self._mark_idle)
+                if self._stop_requested:
+                    break
+        except Exception as error:  # noqa: BLE001
+            try:
+                self.call_from_thread(self._append_system_line, f"Unexpected worker error: {error}")
+            except Exception:  # noqa: BLE001
+                pass
+        finally:
+            self._mark_idle_from_worker()
+
+    def _mark_idle_from_worker(self) -> None:
+        try:
+            self.call_from_thread(self._mark_idle)
+        except Exception:  # noqa: BLE001
+            # Fallback used if the app is shutting down and thread handoff fails.
+            self._busy = False
+            self._stop_requested = False
 
     def _create_response_block(self, response_id: int, kind: str, source: str) -> None:
         messages = self.query_one("#messages", VerticalScroll)
@@ -685,8 +783,20 @@ def run_textual_tui(
         trigger=trigger,
         initial_request=request,
     )
-    # Disable mouse by default so terminal text selection/copy works reliably.
-    # Set AIDZERO_TUI_MOUSE=1/true/yes/on to re-enable clickable widgets.
-    mouse_enabled = os.getenv("AIDZERO_TUI_MOUSE", "").strip().lower() in {"1", "true", "yes", "on"}
+    # Mouse is enabled by default so wheel scrolling works naturally in the TUI.
+    # Set AIDZERO_TUI_MOUSE=0/false/no/off to disable it if you prefer terminal selection behavior.
+    mouse_enabled = _read_bool_env("AIDZERO_TUI_MOUSE", default=True)
     result = app.run(mouse=mouse_enabled)
     return int(result or 0)
+
+
+def _read_bool_env(name: str, *, default: bool) -> bool:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    value = raw_value.strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    return default

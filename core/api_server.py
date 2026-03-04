@@ -7,7 +7,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
 import threading
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
 
 from core.agents import AgentProfileManager
@@ -42,11 +42,50 @@ class CoreRuntimeService:
             events = self.runtime.gateway.collect(trigger=trigger, prompt=prompt, consume=consume)
         return [trigger_event_to_dict(event) for event in events]
 
-    def run_event(self, *, event_payload: dict[str, Any], max_rounds: int) -> dict[str, Any]:
+    def run_event(
+        self,
+        *,
+        event_payload: dict[str, Any],
+        max_rounds: int,
+        include_trace: bool = False,
+    ) -> dict[str, Any]:
+        event = trigger_event_from_dict(event_payload)
+        artifacts: list[dict[str, Any]] = []
+        on_artifact = artifacts.append if include_trace else None
+        with self._lock:
+            result = self.runtime.engine.run_event(
+                event,
+                max_rounds=max_rounds,
+                on_artifact=on_artifact,
+            )
+        payload: dict[str, Any] = {"result": turn_result_to_dict(result)}
+        if include_trace:
+            payload["artifacts"] = artifacts
+        return payload
+
+    def run_event_stream(
+        self,
+        *,
+        event_payload: dict[str, Any],
+        max_rounds: int,
+        on_stream: Callable[[str], None] | None = None,
+        on_artifact: Callable[[dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
         event = trigger_event_from_dict(event_payload)
         with self._lock:
-            result = self.runtime.engine.run_event(event, max_rounds=max_rounds)
+            result = self.runtime.engine.run_event(
+                event,
+                max_rounds=max_rounds,
+                on_stream=on_stream,
+                on_artifact=on_artifact,
+            )
         return turn_result_to_dict(result)
+
+    def reset_session(self) -> None:
+        with self._lock:
+            reset = getattr(self.runtime.engine, "reset_session", None)
+            if callable(reset):
+                reset()
 
     def history_add(self, *, prompt: str) -> list[str]:
         with self._lock:
@@ -115,6 +154,14 @@ class _CoreRequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
+        if parsed.path == "/engine/run_event_stream":
+            return self._handle_run_event_stream()
+        if parsed.path == "/engine/session/reset":
+            payload = self._read_json_body()
+            if payload is None:
+                return
+            self.service.reset_session()
+            return self._ok({"status": "ok"})
         payload = self._read_json_body()
         if payload is None:
             return
@@ -133,11 +180,16 @@ class _CoreRequestHandler(BaseHTTPRequestHandler):
             if not isinstance(event_payload, dict):
                 return self._error(400, "'event' must be a JSON object")
             max_rounds = _to_int(payload.get("max_rounds"), default=6, minimum=1)
+            include_trace = bool(payload.get("include_trace", False))
             try:
-                result = self.service.run_event(event_payload=event_payload, max_rounds=max_rounds)
+                result_payload = self.service.run_event(
+                    event_payload=event_payload,
+                    max_rounds=max_rounds,
+                    include_trace=include_trace,
+                )
             except Exception as error:  # noqa: BLE001
                 return self._error(502, f"Engine execution failed: {error}")
-            return self._ok({"result": result})
+            return self._ok(result_payload)
 
         if parsed.path == "/history/add":
             prompt = str(payload.get("prompt", ""))
@@ -152,6 +204,42 @@ class _CoreRequestHandler(BaseHTTPRequestHandler):
             return self._ok({"profile": profile})
 
         return self._error(404, f"Unknown endpoint: {parsed.path}")
+
+    def _handle_run_event_stream(self) -> None:
+        payload = self._read_json_body()
+        if payload is None:
+            return
+        event_payload = payload.get("event")
+        if not isinstance(event_payload, dict):
+            return self._error(400, "'event' must be a JSON object")
+        max_rounds = _to_int(payload.get("max_rounds"), default=6, minimum=1)
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.end_headers()
+
+        def _send_sse(event_name: str, data: dict[str, Any]) -> None:
+            body = (
+                f"event: {event_name}\n"
+                f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+            ).encode("utf-8")
+            self.wfile.write(body)
+            self.wfile.flush()
+
+        try:
+            result_payload = self.service.run_event_stream(
+                event_payload=event_payload,
+                max_rounds=max_rounds,
+                on_stream=lambda chunk: _send_sse("stream", {"chunk": str(chunk)}),
+                on_artifact=lambda artifact: _send_sse("artifact", dict(artifact)),
+            )
+            _send_sse("result", {"result": result_payload})
+        except Exception as error:  # noqa: BLE001
+            _send_sse("error", {"message": f"Engine execution failed: {error}"})
+        finally:
+            self.close_connection = True
 
     def _read_json_body(self) -> dict[str, Any] | None:
         raw_length = self.headers.get("Content-Length")
