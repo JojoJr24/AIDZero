@@ -352,6 +352,23 @@ class OpenAICompatibleProvider:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 self._register_active_stream(response)
                 try:
+                    content_type = str(getattr(response, "headers", {}).get("Content-Type", "")).lower()
+                    if "text/event-stream" not in content_type:
+                        raw_body = response.read().decode("utf-8", errors="replace").strip()
+                        if not raw_body:
+                            return
+                        try:
+                            parsed_payload = json.loads(raw_body)
+                        except json.JSONDecodeError as error:
+                            raise self.error_cls(
+                                f"{self.provider_label} returned non-SSE invalid JSON: {raw_body[:300]}"
+                            ) from error
+                        if isinstance(parsed_payload, dict):
+                            yield parsed_payload
+                            return
+                        raise self.error_cls(
+                            f"{self.provider_label} returned non-SSE non-object JSON response."
+                        )
                     for raw_payload in _iter_sse_payloads(response):
                         if self._is_stop_requested():
                             break
@@ -476,6 +493,9 @@ def _extract_stream_text(payload: dict[str, Any]) -> list[str]:
         delta = choice.get("delta")
         if isinstance(delta, dict):
             chunks.extend(_extract_content_text(delta.get("content")))
+        message = choice.get("message")
+        if isinstance(message, dict):
+            chunks.extend(_extract_content_text(message.get("content")))
         text_value = choice.get("text")
         if isinstance(text_value, str):
             chunks.append(text_value)

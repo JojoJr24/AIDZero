@@ -112,6 +112,20 @@ class InfiniteSameChunkStreamingLLM:
         self.stopped = True
 
 
+class FailingOnceLLM:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.messages_by_call: list[list[dict]] = []
+
+    def complete(self, messages, **kwargs):
+        del kwargs
+        self.calls += 1
+        self.messages_by_call.append(messages)
+        if self.calls == 1:
+            raise RuntimeError("provider exploded")
+        return "respuesta despues del error"
+
+
 def test_engine_executes_tool_and_persists_outputs(tmp_path):
     history_store = JsonlStore(tmp_path / ".aidzero" / "store" / "history.jsonl")
     output_store = JsonlStore(tmp_path / ".aidzero" / "store" / "output.jsonl")
@@ -676,3 +690,34 @@ def test_engine_breaks_infinite_same_chunk_stream(tmp_path):
     assert llm.stopped is True
     assert result.response == "Hola"
     assert "".join(chunks) == "Hola"
+
+
+def test_engine_keeps_failed_user_prompt_in_session_context(tmp_path):
+    history_store = JsonlStore(tmp_path / ".aidzero" / "store" / "history.jsonl")
+    output_store = JsonlStore(tmp_path / ".aidzero" / "store" / "output.jsonl")
+    memory = MemoryStore(tmp_path / ".aidzero" / "memory.json")
+    tools = ToolRegistry()
+    llm = FailingOnceLLM()
+    engine = AgentEngine(
+        repo_root=tmp_path,
+        llm=llm,
+        tools=tools,
+        history_store=history_store,
+        memory_store=memory,
+        output_store=output_store,
+    )
+
+    try:
+        engine.run_event(TriggerEvent(kind="interactive", source="terminal", prompt="primer prompt"))
+        assert False, "Expected provider failure in first call"
+    except RuntimeError as error:
+        assert "provider exploded" in str(error)
+
+    result = engine.run_event(TriggerEvent(kind="interactive", source="terminal", prompt="segundo prompt"))
+
+    assert result.response == "respuesta despues del error"
+    second_call_messages = llm.messages_by_call[1]
+    roles = [item["role"] for item in second_call_messages]
+    assert roles == ["system", "user", "user"]
+    assert second_call_messages[1]["content"] == "primer prompt"
+    assert second_call_messages[2]["content"] == "segundo prompt"

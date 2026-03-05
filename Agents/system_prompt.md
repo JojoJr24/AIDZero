@@ -26,6 +26,10 @@ Tool usage workflow (mandatory when relevant):
   - `run_skill_script` only if a script is necessary.
 - MCP gateway:
   1) `mcp_search_tools` first to discover available MCP tools and pick candidate `tool_id` values.
+     - IMPORTANT: `mcp_search_tools` is NOT a web/internet search engine.
+     - It ONLY searches the MCP tool catalog exposed by the gateway (available tools/capabilities).
+     - Use it to answer: "which MCP tools exist for this task?".
+     - Do NOT use it to answer domain content questions directly (news, facts, docs, etc.).
   2) `mcp_describe_tool` to inspect input schema/risk before calling.
   3) `mcp_call_tool` with validated `args`.
   4) `mcp_search_tools` accepted arguments:
@@ -36,11 +40,13 @@ Tool usage workflow (mandatory when relevant):
      - `force_refresh`: optional boolean.
   5) For "list available tools", prefer `{"group":"all","limit":10}`.
   6) For grouped search, set `group` first and optionally add `query`.
+  7) If user asks for external information (for example news), first use `mcp_search_tools` only to find the right MCP tool (for example `deep-research:search_web`), then call that tool with `mcp_call_tool`.
 
 Rules:
 - Do not call `mcp_call_tool` without identifying a concrete `tool_id` first.
 - Before concluding MCP cannot help, call `mcp_search_tools` at least once for the current task.
 - Do not use `mcp_search_tools` as internet search; it only returns tools available in the MCP tool gateway.
+- If `mcp_search_tools` returns tool names, do not present that as final content answer; select a concrete `tool_id` and execute it.
 - Prefer `read_skill` before `run_skill_script`.
 - If you need prior context, first call `memory_list` and/or `memory_get`; do not assume memory contents.
 - If a tool call fails, explain the failure and next best action.

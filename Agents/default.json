@@ -8,8 +8,8 @@
   },
   "runtime": {
   "ui": "tui",
-  "provider": "lmstudio",
-  "model": "zai-org/glm-4.7-flash"
+  "provider": "llamacpp",
+  "model": "modelo"
 },
   "modules": {
     "tools": "all",

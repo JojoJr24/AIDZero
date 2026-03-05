@@ -19,7 +19,7 @@ from tool_index import ToolIndex
 
 
 GATEWAY_NAME = "tool-search-gateway"
-GATEWAY_VERSION = "0.1.0"
+GATEWAY_VERSION = "0.2.0"
 MCP_CONFIG_FILENAME = "mcporter.json"
 DEFAULT_MCPORTER_CONFIG = {"mcpServers": {}}
 

@@ -45,40 +45,6 @@ def _discover_providers(repo_root: Path) -> list[str]:
     return names
 
 
-def _parse_ui_options(raw_items: list[str], trigger: str) -> dict[str, str]:
-    options: dict[str, str] = {"trigger": trigger}
-    for item in raw_items:
-        if "=" not in item:
-            raise ValueError(f"Invalid --ui-option '{item}'. Use KEY=VALUE.")
-        key, value = item.split("=", 1)
-        key = key.strip()
-        if not key:
-            raise ValueError(f"Invalid --ui-option '{item}'. KEY cannot be empty.")
-        options[key] = value.strip()
-    return options
-
-
-def _pick(prompt: str, options: list[str], default: str | None = None) -> str:
-    if not options:
-        raise RuntimeError(f"No options available for: {prompt}")
-
-    normalized_default = default if default in options else options[0]
-    print(f"\n{prompt}")
-    for index, option in enumerate(options, start=1):
-        marker = " (default)" if option == normalized_default else ""
-        print(f"{index}. {option}{marker}")
-
-    while True:
-        raw = input(f"Choose 1-{len(options)} (Enter for default): ").strip()
-        if not raw:
-            return normalized_default
-        if raw.isdigit():
-            idx = int(raw)
-            if 1 <= idx <= len(options):
-                return options[idx - 1]
-        print("Invalid selection.")
-
-
 def _load_provider_module(repo_root: Path, provider_name: str) -> ModuleType:
     provider_file = repo_root / "LLMProviders" / provider_name / "provider.py"
     if not provider_file.is_file():
@@ -146,46 +112,6 @@ def _list_provider_models(repo_root: Path, provider_name: str) -> list[str]:
         if model_name not in unique:
             unique.append(model_name)
     return unique
-
-
-def _pick_model_for_provider(repo_root: Path, provider_name: str) -> str:
-    try:
-        models = _list_provider_models(repo_root, provider_name)
-    except Exception as error:  # noqa: BLE001
-        print(f"warning> failed to fetch model list for provider '{provider_name}': {error}")
-        manual = input("Model name (required): ").strip()
-        if not manual:
-            raise RuntimeError("Model name cannot be empty.")
-        return manual
-
-    if not models:
-        print(f"warning> provider '{provider_name}' returned an empty model list.")
-        manual = input("Model name (required): ").strip()
-        if not manual:
-            raise RuntimeError("Model name cannot be empty.")
-        return manual
-
-    print(f"\nAvailable models for provider '{provider_name}':")
-    for index, model_name in enumerate(models, start=1):
-        marker = " (default)" if index == 1 else ""
-        print(f"{index}. {model_name}{marker}")
-    print("m. Enter model manually")
-
-    while True:
-        raw = input(f"Choose 1-{len(models)} (Enter for default, or 'm'): ").strip().lower()
-        if not raw:
-            return models[0]
-        if raw == "m":
-            manual = input("Model name (required): ").strip()
-            if manual:
-                return manual
-            print("Model name cannot be empty.")
-            continue
-        if raw.isdigit():
-            idx = int(raw)
-            if 1 <= idx <= len(models):
-                return models[idx - 1]
-        print("Invalid selection.")
 
 
 def main() -> int:

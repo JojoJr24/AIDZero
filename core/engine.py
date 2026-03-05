@@ -209,6 +209,7 @@ class AgentEngine:
         on_stream: Callable[[str], None] | None = None,
         on_artifact: Callable[[dict[str, Any]], None] | None = None,
     ) -> TurnResult:
+        user_prompt_text = event.prompt.strip()
         used_tools: list[str] = []
         base_messages = self._build_initial_messages(event)
         messages = [dict(item) for item in base_messages]
@@ -235,97 +236,103 @@ class AgentEngine:
             on_artifact(payload)
 
         rounds = 0
-        while rounds < max_rounds:
-            rounds += 1
-            assistant_text, emitted_artifacts_live = self._complete_assistant(
-                messages,
-                on_stream=on_stream,
-                on_artifact=_emit_artifact if on_artifact is not None else None,
-                round_number=rounds,
-            )
-            if not emitted_artifacts_live:
-                self._emit_embedded_artifacts(
-                    assistant_text,
+        try:
+            while rounds < max_rounds:
+                rounds += 1
+                assistant_text, emitted_artifacts_live = self._complete_assistant(
+                    messages,
+                    on_stream=on_stream,
                     on_artifact=_emit_artifact if on_artifact is not None else None,
                     round_number=rounds,
                 )
-            tool_call = self._extract_tool_call(assistant_text)
-
-            if tool_call is None:
-                visible = self._strip_think_blocks(assistant_text).strip()
-                if visible:
-                    response_fragments.append(visible)
-                break
-
-            tool_signature = self._tool_call_signature(tool_call)
-            if tool_signature == last_tool_signature:
-                repeated_same_tool_call += 1
-            else:
-                repeated_same_tool_call = 1
-                last_tool_signature = tool_signature
-            if repeated_same_tool_call >= 3:
-                response_fragments.append(
-                    "Stopped: repeated identical tool call detected. "
-                    "Please revise the prompt or tool instructions."
-                )
-                break
-
-            prelude = assistant_text.replace(tool_call.raw_block, "")
-            prelude = self._strip_think_blocks(prelude).strip()
-            if prelude:
-                response_fragments.append(prelude)
-            used_tools.append(tool_call.name)
-
-            tool_result = self._execute_tool(tool_call)
-            tool_result_payload = {
-                "tool_name": tool_result.tool_name,
-                "status": tool_result.status,
-                "payload": tool_result.payload,
-            }
-            tool_result_json = json.dumps(tool_result_payload, ensure_ascii=False, indent=2)
-
-            if on_artifact is not None:
-                tool_artifact_id = latest_tool_call_artifact_ids.get(rounds)
-                if tool_artifact_id:
-                    _emit_artifact(
-                        {
-                            "event": "chunk",
-                            "artifact_id": tool_artifact_id,
-                            "round": rounds,
-                            "content": "\n\nTool response (JSON):\n" + tool_result_json,
-                        }
+                if not emitted_artifacts_live:
+                    self._emit_embedded_artifacts(
+                        assistant_text,
+                        on_artifact=_emit_artifact if on_artifact is not None else None,
+                        round_number=rounds,
                     )
+                tool_call = self._extract_tool_call(assistant_text)
 
-            messages.append({"role": "assistant", "content": assistant_text})
-            messages.append(
-                {
-                    "role": "user",
-                    "content": (
-                        "Tool response (JSON):\n"
-                        + tool_result_json
-                        + "\nContinue with your final user-facing answer."
-                    ),
+                if tool_call is None:
+                    visible = self._strip_think_blocks(assistant_text).strip()
+                    if visible:
+                        response_fragments.append(visible)
+                    break
+
+                tool_signature = self._tool_call_signature(tool_call)
+                if tool_signature == last_tool_signature:
+                    repeated_same_tool_call += 1
+                else:
+                    repeated_same_tool_call = 1
+                    last_tool_signature = tool_signature
+                if repeated_same_tool_call >= 3:
+                    response_fragments.append(
+                        "Stopped: repeated identical tool call detected. "
+                        "Please revise the prompt or tool instructions."
+                    )
+                    break
+
+                prelude = assistant_text.replace(tool_call.raw_block, "")
+                prelude = self._strip_think_blocks(prelude).strip()
+                if prelude:
+                    response_fragments.append(prelude)
+                used_tools.append(tool_call.name)
+
+                tool_result = self._execute_tool(tool_call)
+                tool_result_payload = {
+                    "tool_name": tool_result.tool_name,
+                    "status": tool_result.status,
+                    "payload": tool_result.payload,
                 }
+                tool_result_json = json.dumps(tool_result_payload, ensure_ascii=False, indent=2)
+
+                if on_artifact is not None:
+                    tool_artifact_id = latest_tool_call_artifact_ids.get(rounds)
+                    if tool_artifact_id:
+                        _emit_artifact(
+                            {
+                                "event": "chunk",
+                                "artifact_id": tool_artifact_id,
+                                "round": rounds,
+                                "content": "\n\nTool response (JSON):\n" + tool_result_json,
+                            }
+                        )
+
+                messages.append({"role": "assistant", "content": assistant_text})
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "Tool response (JSON):\n"
+                            + tool_result_json
+                            + "\nContinue with your final user-facing answer."
+                        ),
+                    }
+                )
+
+            if rounds >= max_rounds and not response_fragments:
+                response_fragments.append(
+                    "Stopped: reached maximum reasoning rounds without a final answer."
+                )
+
+            final_response = "\n".join(item for item in response_fragments if item).strip()
+            if not final_response:
+                final_response = "No response generated."
+
+            turn_result = TurnResult(
+                event=event,
+                response=final_response,
+                rounds=rounds,
+                used_tools=used_tools,
             )
-
-        if rounds >= max_rounds and not response_fragments:
-            response_fragments.append(
-                "Stopped: reached maximum reasoning rounds without a final answer."
-            )
-
-        final_response = "\n".join(item for item in response_fragments if item).strip()
-        if not final_response:
-            final_response = "No response generated."
-
-        turn_result = TurnResult(
-            event=event,
-            response=final_response,
-            rounds=rounds,
-            used_tools=used_tools,
-        )
-        self._persist_turn(turn_result)
-        self._append_session_turn(user_prompt=event.prompt, assistant_response=turn_result.response)
-        return turn_result
+            self._persist_turn(turn_result)
+            self._append_session_turn(user_prompt=event.prompt, assistant_response=turn_result.response)
+            return turn_result
+        except Exception:
+            # Preserve the user turn in active session even when provider/tooling fails mid-turn.
+            if user_prompt_text:
+                self._session_messages.append({"role": "user", "content": user_prompt_text})
+            raise
 
     def _complete_assistant(
         self,
@@ -527,7 +534,7 @@ class AgentEngine:
         if self.system_prompt_override:
             return self.system_prompt_override
 
-        custom_prompt_path = self.repo_root / "core" / "system_prompt.md"
+        custom_prompt_path = self.repo_root / "Agents" / "system_prompt.md"
         if custom_prompt_path.is_file():
             text = custom_prompt_path.read_text(encoding="utf-8", errors="replace").strip()
             if text:

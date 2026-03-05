@@ -178,7 +178,7 @@ class _TextualTUI(App[int]):
         )
 
     def compose(self) -> ComposeResult:
-        yield Static("", id="status")
+        yield Static("", id="status", markup=False)
         yield VerticalScroll(id="messages")
         yield OptionList(id="command-selector")
         yield OptionList(id="history-selector")
@@ -361,7 +361,11 @@ class _TextualTUI(App[int]):
 
     def _append_system_line(self, text: str) -> None:
         messages = self.query_one("#messages", VerticalScroll)
-        row = Static(f"{datetime.now().strftime('%H:%M:%S')}  {text}", classes="resp-header")
+        row = Static(
+            f"{datetime.now().strftime('%H:%M:%S')}  {text}",
+            classes="resp-header",
+            markup=False,
+        )
         messages.mount(row)
         messages.scroll_end(animate=False)
 
@@ -594,8 +598,12 @@ class _TextualTUI(App[int]):
 
     def _create_response_block(self, response_id: int, kind: str, source: str) -> None:
         messages = self.query_one("#messages", VerticalScroll)
-        header = Static(f"{datetime.now().strftime('%H:%M:%S')}  {kind} · {source}", classes="resp-header")
-        live_text = Static("", classes="resp-body")
+        header = Static(
+            f"{datetime.now().strftime('%H:%M:%S')}  {kind} · {source}",
+            classes="resp-header",
+            markup=False,
+        )
+        live_text = Static("", classes="resp-body", markup=False)
         body = Vertical(live_text, classes="resp-body-wrap")
         block = Vertical(header, body, classes="response-block")
         messages.mount(block)
@@ -662,7 +670,7 @@ class _TextualTUI(App[int]):
             if isinstance(collapsible, Collapsible):
                 collapsible.collapsed = True
         self._update_tail_widget(pending)
-        footer = Static(f"rounds={rounds} tools={tools}", classes="resp-header")
+        footer = Static(f"rounds={rounds} tools={tools}", classes="resp-header", markup=False)
         pending.block.mount(footer)
         self.query_one("#messages", VerticalScroll).scroll_end(animate=False)
 
@@ -720,11 +728,11 @@ class _TextualTUI(App[int]):
             if offset > cursor:
                 chunk = pending.stream_buffer[cursor:offset]
                 if chunk:
-                    pending.body.mount(Static(chunk, classes="resp-body"))
+                    pending.body.mount(Static(chunk, classes="resp-body", markup=False))
             artifact_type = str(entry["type"])
             round_number = entry.get("round")
             title = f"{artifact_type} · round {round_number}" if round_number else artifact_type
-            content_widget = Static(str(entry["content"]), classes="resp-body")
+            content_widget = Static(str(entry["content"]), classes="resp-body", markup=False)
             collapsible = Collapsible(
                 content_widget,
                 title=title,
@@ -738,7 +746,7 @@ class _TextualTUI(App[int]):
 
         pending.tail_start = cursor
         tail = pending.stream_buffer[cursor:]
-        tail_widget = Static(tail, classes="resp-body")
+        tail_widget = Static(tail, classes="resp-body", markup=False)
         pending.tail_widget = tail_widget
         pending.body.mount(tail_widget)
 
@@ -751,7 +759,11 @@ class _TextualTUI(App[int]):
 
     def _append_user_prompt(self, prompt: str) -> None:
         messages = self.query_one("#messages", VerticalScroll)
-        line = Static(f"{datetime.now().strftime('%H:%M:%S')}  you> {prompt}", classes="user-prompt")
+        line = Static(
+            f"{datetime.now().strftime('%H:%M:%S')}  you> {prompt}",
+            classes="user-prompt",
+            markup=False,
+        )
         messages.mount(line)
         messages.scroll_end(animate=False)
 

@@ -20,3 +20,6 @@ Architecture constraints:
 - Tool priority order is mandatory: 1) local tools, 2) skills, 3) MCP gateway.
 - If MCP is needed, start with `mcp_search_tools` before any `mcp_call_tool`.
 - `mcp_search_tools` parameters: `group` (`all|read|write|destructive`), optional `query`, optional `server`, optional `limit`.
+- `mcp_search_tools` is only a MCP tool-catalog lookup, not an internet/content search.
+- Use `mcp_search_tools` to choose a `tool_id`, then call that tool with `mcp_call_tool`.
+- Never present `mcp_search_tools` output (tool list) as the final content answer to the user's domain question.
