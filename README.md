@@ -1,4 +1,4 @@
-# AIDZero Runtime (v0.2.0)
+# AIDZero Runtime (v0.2.1)
 
 AIDZero is a modular runtime for LLM agents with dynamic UI loading, pluggable provider adapters, local/MCP tools, and agent profiles.
 
@@ -27,6 +27,7 @@ AIDZero is a modular runtime for LLM agents with dynamic UI loading, pluggable p
 uv run AIDZero.py
 uv run AIDZero.py --request "Summarize this repository"
 uv run AIDZero.py --agent default --request "List available tools"
+uv run AIDZero.py --headless
 
 # Split runtime: core only
 uv run aidzero-core --agent default --host 0.0.0.0 --port 8765
@@ -37,6 +38,24 @@ uv run aidzero-ui --ui tui --core-url http://127.0.0.1:8765
 # All in one (core + UI)
 uv run aidzero-all --ui tui --agent default --host 127.0.0.1 --port 8765
 ```
+
+## Headless Mode
+
+Use headless mode when you want a one-shot run without opening the UI.
+
+1. Create `HeadlessPrompt.txt` in the repository root with your prompt.
+2. Run:
+
+```bash
+uv run AIDZero.py --headless
+```
+
+Behavior:
+- Uses the `default` agent profile.
+- Reads input from `HeadlessPrompt.txt`.
+- Writes output to:
+  - `Results/latest.txt`
+  - `Results/result_YYYYMMDD_HHMMSS.txt`
 
 ## Project Layout
 
@@ -61,6 +80,7 @@ bash MCP/run-tool-gateway.sh
 Profiles are loaded from `Agents/*.json` and persist active selection in `.aidzero/agent_profile.json`.
 
 Each profile can define:
+
 - `system_prompt_file` or inline `system_prompt`
 - runtime defaults: `ui`, `provider`, `model`
 - features: `memory`, `history`
@@ -73,3 +93,5 @@ Each profile can define:
 - `.aidzero/output/latest.txt`
 - `.aidzero/memory.json`
 - `.aidzero/agent_profile.json`
+- `Results/latest.txt` (headless mode)
+- `Results/result_YYYYMMDD_HHMMSS.txt` (headless mode)

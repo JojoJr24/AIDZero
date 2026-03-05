@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "aidzero"
 version = "0.2.1"
 description = "Runtime modular de agentes LLM para AIDZero."
-readme = "AIDZeroCode/README.md"
+readme = "README.md"
 requires-python = ">=3.13"
 license = { text = "MIT" }
 authors = [{ name = "AIDZero" }]
@@ -28,13 +28,13 @@ aidzero-ui = "core.ui_launcher:main"
 aidzero-all = "core.all_launcher:main"
 
 [tool.setuptools]
-py-modules = ["AIDZero"]
+py-modules = ["AIDZero", "main"]
 
 [tool.setuptools.packages.find]
-where = ["AIDZeroCode"]
+where = ["."]
 include = ["core*", "DASH*", "TOOLS*", "LLMProviders*", "UI*"]
 namespaces = true
 
 [tool.pytest.ini_options]
-testpaths = ["AIDZeroCode/tests"]
+testpaths = ["tests"]
 norecursedirs = ["generated_agents"]
