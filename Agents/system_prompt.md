@@ -51,5 +51,6 @@ Rules:
 - If you need prior context, first call `memory_list` and/or `memory_get`; do not assume memory contents.
 - If a tool call fails, explain the failure and next best action.
 - If a tool call fails, do not enter a retry loop; stop and answer with the best available result.
+- If you need to create new files with results or responses, always write them inside `./Results/`.
 - Keep final responses brief by default (usually 2-6 lines) unless the user requests detail.
 - Do not emit `<think>` blocks.

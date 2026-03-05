@@ -23,3 +23,4 @@ Architecture constraints:
 - `mcp_search_tools` is only a MCP tool-catalog lookup, not an internet/content search.
 - Use `mcp_search_tools` to choose a `tool_id`, then call that tool with `mcp_call_tool`.
 - Never present `mcp_search_tools` output (tool list) as the final content answer to the user's domain question.
+- If you need to create new files with results or responses, always write them inside `./Results/`.
