@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from TOOLS import mcp_call_tool, mcp_describe_tool, mcp_seach_tool, mcp_search_tools
+from TOOLS import mcp_call_tool, mcp_describe_tool, mcp_search_tools
 
 
 def test_mcp_tools_forward_expected_gateway_names_and_payloads(monkeypatch, tmp_path):
@@ -59,25 +59,6 @@ def test_mcp_tools_forward_expected_gateway_names_and_payloads(monkeypatch, tmp_
         "forceRefresh": True,
         "timeoutMs": 3000,
     }
-
-
-def test_mcp_seach_tool_alias_delegates_to_mcp_search_tools(monkeypatch, tmp_path):
-    captured: dict[str, object] = {}
-
-    def fake_search_run(arguments, *, repo_root, memory):
-        captured["arguments"] = arguments
-        captured["repo_root"] = repo_root
-        captured["memory"] = memory
-        return {"result": {"tools": [], "count": 0}}
-
-    monkeypatch.setattr(mcp_search_tools, "run", fake_search_run)
-
-    result = mcp_seach_tool.run({"limit": 2}, repo_root=tmp_path, memory=None)
-
-    assert result == {"result": {"tools": [], "count": 0}}
-    assert captured["arguments"] == {"limit": 2}
-    assert captured["repo_root"] == tmp_path
-    assert captured["memory"] is None
 
 
 def test_mcp_search_tools_supports_query_and_group_filter(monkeypatch, tmp_path):

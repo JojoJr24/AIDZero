@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from DASH import agent
+from DASH import agente as agent
 
 
 class _Profile:
