@@ -32,7 +32,7 @@ class TUIApp:
         self.agent_profile = agent_profile
 
     def run(self, *, request: str | None, trigger: str) -> int:
-        active_trigger = trigger.strip().lower() or "interactive"
+        del trigger
         return run_textual_tui(
             repo_root=self.repo_root,
             engine=self.engine,
@@ -41,5 +41,5 @@ class TUIApp:
             agent_manager=self.agent_manager,
             agent_profile=self.agent_profile,
             request=request,
-            trigger=active_trigger,
+            trigger="interactive",
         )

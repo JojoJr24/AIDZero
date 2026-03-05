@@ -15,6 +15,7 @@ def test_agent_profile_manager_reads_active_profile(tmp_path):
         {
           "name": "default",
           "system_prompt_file": "system_prompt.md",
+          "runtime": {"ui": "terminal", "provider": "openai", "model": "gpt-4o-mini"},
           "modules": {"tools": "all", "dash": "all"}
         }
         """,
@@ -30,6 +31,9 @@ def test_agent_profile_manager_reads_active_profile(tmp_path):
     assert profile.enabled_dash_modules is None
     assert profile.memory_enabled is True
     assert profile.history_enabled is True
+    assert profile.runtime_ui == "terminal"
+    assert profile.runtime_provider == "openai"
+    assert profile.runtime_model == "gpt-4o-mini"
 
 
 def test_agent_profile_manager_parses_memory_and_history_flags(tmp_path):
@@ -41,6 +45,7 @@ def test_agent_profile_manager_parses_memory_and_history_flags(tmp_path):
         {
           "name": "default",
           "system_prompt_file": "system_prompt.md",
+          "runtime": {"ui": "terminal", "provider": "openai", "model": "gpt-4o-mini"},
           "features": {"memory": false, "history": false},
           "modules": {"tools": "all", "dash": "all"}
         }
@@ -64,6 +69,7 @@ def test_agent_profile_manager_rejects_invalid_feature_flag(tmp_path):
         {
           "name": "default",
           "system_prompt_file": "system_prompt.md",
+          "runtime": {"ui": "terminal", "provider": "openai", "model": "gpt-4o-mini"},
           "features": {"memory": "yes"}
         }
         """,
@@ -89,6 +95,7 @@ def test_agent_profile_manager_rejects_prompt_file_outside_agents(tmp_path):
         {
           "name": "default",
           "system_prompt_file": "../core/system_prompt.md",
+          "runtime": {"ui": "terminal", "provider": "openai", "model": "gpt-4o-mini"},
           "modules": {"tools": "all", "dash": "all"}
         }
         """,
@@ -101,6 +108,28 @@ def test_agent_profile_manager_rejects_prompt_file_outside_agents(tmp_path):
         assert False, "Expected RuntimeError for prompt path outside Agents/"
     except RuntimeError as error:
         assert "within Agents/" in str(error)
+
+
+def test_agent_profile_manager_rejects_missing_runtime_config(tmp_path):
+    agents_dir = tmp_path / "Agents"
+    agents_dir.mkdir(parents=True, exist_ok=True)
+    (agents_dir / "system_prompt.md").write_text("Base prompt\n", encoding="utf-8")
+    (agents_dir / "default.json").write_text(
+        """
+        {
+          "name": "default",
+          "system_prompt_file": "system_prompt.md"
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    manager = AgentProfileManager(tmp_path)
+    try:
+        manager.get_active_profile()
+        assert False, "Expected RuntimeError for missing runtime config"
+    except RuntimeError as error:
+        assert "runtime" in str(error)
 
 
 def test_build_default_tool_registry_can_filter_tools_by_agent_profile(tmp_path):

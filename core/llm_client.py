@@ -35,6 +35,20 @@ class LLMClient:
         )
 
     def complete_stream(self, messages: list[dict[str, Any]], **kwargs: Any) -> Iterator[str]:
+        if hasattr(self.provider, "stream_chat"):
+            structured_tool_calls: dict[int, dict[str, str]] = {}
+            emitted_text = False
+            for payload in self.provider.stream_chat(self.model, messages, **kwargs):
+                for chunk in self._extract_openai_stream(payload):
+                    if chunk:
+                        emitted_text = True
+                        yield chunk
+                self._collect_openai_stream_tool_calls(payload, structured_tool_calls)
+            tool_block = self._serialize_first_tool_call(structured_tool_calls)
+            if tool_block and not emitted_text:
+                yield tool_block
+            return
+
         if hasattr(self.provider, "stream_generate_text"):
             prompt = self._flatten_messages(messages)
             for chunk in self.provider.stream_generate_text(self.model, prompt, **kwargs):
@@ -133,6 +147,11 @@ class LLMClient:
                         texts.append(part["text"])
                 if texts:
                     return "\n".join(texts).strip()
+            tool_calls = message.get("tool_calls")
+            if isinstance(tool_calls, list):
+                serialized = LLMClient._serialize_tool_call_list(tool_calls)
+                if serialized:
+                    return serialized
 
         content = first.get("text")
         if isinstance(content, str):
@@ -171,3 +190,142 @@ class LLMClient:
                 if isinstance(part, dict) and isinstance(part.get("text"), str):
                     texts.append(part["text"])
         return "\n".join(texts).strip()
+
+    @staticmethod
+    def _extract_openai_stream(payload: Any) -> list[str]:
+        if not isinstance(payload, dict):
+            text = str(payload).strip()
+            return [text] if text else []
+
+        chunks: list[str] = []
+        choices = payload.get("choices")
+        if not isinstance(choices, list):
+            return chunks
+        for choice in choices:
+            if not isinstance(choice, dict):
+                continue
+            delta = choice.get("delta")
+            if isinstance(delta, dict):
+                content = delta.get("content")
+                if isinstance(content, str):
+                    chunks.append(content)
+                elif isinstance(content, list):
+                    for part in content:
+                        if isinstance(part, dict) and isinstance(part.get("text"), str):
+                            chunks.append(part["text"])
+                        elif isinstance(part, str):
+                            chunks.append(part)
+            message = choice.get("message")
+            if isinstance(message, dict):
+                content = message.get("content")
+                if isinstance(content, str):
+                    chunks.append(content)
+                elif isinstance(content, list):
+                    for part in content:
+                        if isinstance(part, dict) and isinstance(part.get("text"), str):
+                            chunks.append(part["text"])
+                        elif isinstance(part, str):
+                            chunks.append(part)
+            text = choice.get("text")
+            if isinstance(text, str):
+                chunks.append(text)
+        return chunks
+
+    @staticmethod
+    def _serialize_tool_call_list(tool_calls: list[Any]) -> str:
+        for raw_call in tool_calls:
+            if not isinstance(raw_call, dict):
+                continue
+            function_payload = raw_call.get("function")
+            if not isinstance(function_payload, dict):
+                continue
+            name = function_payload.get("name")
+            if not isinstance(name, str) or not name.strip():
+                continue
+            arguments_raw = function_payload.get("arguments", "{}")
+            arguments_value: Any
+            if isinstance(arguments_raw, str):
+                text = arguments_raw.strip()
+                if not text:
+                    arguments_value = {}
+                else:
+                    try:
+                        arguments_value = json.loads(text)
+                    except json.JSONDecodeError:
+                        arguments_value = {"raw": arguments_raw}
+            elif isinstance(arguments_raw, dict):
+                arguments_value = arguments_raw
+            else:
+                arguments_value = {"raw": arguments_raw}
+            payload = {"name": name.strip(), "arguments": arguments_value}
+            return f"<tool_call>{json.dumps(payload, ensure_ascii=False)}</tool_call>"
+        return ""
+
+    @staticmethod
+    def _collect_openai_stream_tool_calls(
+        payload: Any,
+        collector: dict[int, dict[str, str]],
+    ) -> None:
+        if not isinstance(payload, dict):
+            return
+        choices = payload.get("choices")
+        if not isinstance(choices, list):
+            return
+        for choice in choices:
+            if not isinstance(choice, dict):
+                continue
+            delta = choice.get("delta")
+            if isinstance(delta, dict):
+                raw_tool_calls = delta.get("tool_calls")
+                if isinstance(raw_tool_calls, list):
+                    LLMClient._merge_tool_call_chunks(raw_tool_calls, collector)
+            message = choice.get("message")
+            if isinstance(message, dict):
+                raw_tool_calls = message.get("tool_calls")
+                if isinstance(raw_tool_calls, list):
+                    LLMClient._merge_tool_call_chunks(raw_tool_calls, collector)
+
+    @staticmethod
+    def _merge_tool_call_chunks(
+        tool_calls: list[Any],
+        collector: dict[int, dict[str, str]],
+    ) -> None:
+        for order, raw_call in enumerate(tool_calls):
+            if not isinstance(raw_call, dict):
+                continue
+            raw_index = raw_call.get("index")
+            if isinstance(raw_index, int):
+                index = raw_index
+            else:
+                index = order
+            slot = collector.setdefault(index, {"name": "", "arguments": ""})
+            function_payload = raw_call.get("function")
+            if not isinstance(function_payload, dict):
+                continue
+            raw_name = function_payload.get("name")
+            if isinstance(raw_name, str) and raw_name.strip():
+                slot["name"] = raw_name.strip()
+            raw_arguments = function_payload.get("arguments")
+            if isinstance(raw_arguments, str):
+                slot["arguments"] += raw_arguments
+            elif isinstance(raw_arguments, dict):
+                slot["arguments"] += json.dumps(raw_arguments, ensure_ascii=False)
+
+    @staticmethod
+    def _serialize_first_tool_call(collector: dict[int, dict[str, str]]) -> str:
+        for index in sorted(collector.keys()):
+            slot = collector[index]
+            name = slot.get("name", "").strip()
+            if not name:
+                continue
+            raw_arguments = slot.get("arguments", "").strip()
+            if not raw_arguments:
+                arguments_value: Any = {}
+            else:
+                try:
+                    arguments_value = json.loads(raw_arguments)
+                except json.JSONDecodeError:
+                    arguments_value = {"raw": raw_arguments}
+            payload = {"name": name, "arguments": arguments_value}
+            return f"<tool_call>{json.dumps(payload, ensure_ascii=False)}</tool_call>"
+        return ""

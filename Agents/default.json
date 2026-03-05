@@ -6,6 +6,11 @@
     "memory": true,
     "history": true
   },
+  "runtime": {
+  "ui": "tui",
+  "provider": "llamacpp",
+  "model": "modelo"
+},
   "modules": {
     "tools": "all",
     "dash": "all"

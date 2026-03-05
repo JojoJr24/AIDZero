@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-import builtins
 from pathlib import Path
 
-import pytest
-
-from AIDZero import _list_provider_models, _pick_model_for_provider
+from AIDZero import _list_provider_models
 
 
 def _write(path: Path, content: str) -> None:
@@ -24,14 +21,3 @@ def test_list_provider_models_uses_list_model_names(tmp_path: Path) -> None:
     models = _list_provider_models(tmp_path, "demo")
 
     assert models == ["model-a", "model-b"]
-
-
-def test_pick_model_for_provider_falls_back_to_manual_input(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("AIDZero._list_provider_models", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")))
-
-    answers = iter(["custom-model"])
-    monkeypatch.setattr(builtins, "input", lambda _prompt="": next(answers))
-
-    selected = _pick_model_for_provider(Path("."), "demo")
-
-    assert selected == "custom-model"

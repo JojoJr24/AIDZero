@@ -17,14 +17,18 @@ def call_gateway_tool(
     payload: dict[str, Any] | None = None,
     timeout_seconds: int = 60,
 ) -> dict[str, Any]:
-    node_bin = require_binary("node")
-    script_path = repo_root / "MCP" / "tool-gateway" / "scripts" / "gateway-call.mjs"
+    venv_python = repo_root / ".venv" / "bin" / "python"
+    if venv_python.is_file():
+        python_bin = str(venv_python)
+    else:
+        python_bin = require_binary("python3")
+    script_path = repo_root / "MCP" / "tool-gateway" / "scripts" / "gateway-call.py"
     if not script_path.is_file():
         raise FileNotFoundError(f"Gateway caller script not found: {script_path}")
 
     raw_payload = json.dumps(payload or {}, ensure_ascii=False)
     command = [
-        node_bin,
+        python_bin,
         str(script_path),
         "--tool",
         gateway_tool,
@@ -32,13 +36,18 @@ def call_gateway_tool(
         raw_payload,
     ]
 
-    result = subprocess.run(
-        command,
-        cwd=repo_root,
-        capture_output=True,
-        text=True,
-        timeout=max(1, timeout_seconds),
-    )
+    try:
+        result = subprocess.run(
+            command,
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=max(1, timeout_seconds),
+        )
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeError(
+            f"Gateway call timed out (tool={gateway_tool}, timeout_seconds={timeout_seconds})."
+        ) from error
 
     if result.returncode != 0:
         stderr = (result.stderr or "").strip()

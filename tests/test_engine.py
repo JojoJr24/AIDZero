@@ -19,7 +19,7 @@ class FakeLLM:
         self.calls += 1
         self.messages_by_call.append(messages)
         if self.calls == 1:
-            return "Need a tool. <AID_TOOL_CALL>{\"name\":\"echo\",\"arguments\":{\"value\":\"ok\"}}</AID_TOOL_CALL>"
+            return "Need a tool. <tool_call>{\"name\":\"echo\",\"arguments\":{\"value\":\"ok\"}}</tool_call>"
         return "Final answer from model"
 
 
@@ -36,16 +36,36 @@ class StreamingFakeLLM:
         self.calls += 1
         if self.calls == 1:
             yield "Preface <think>hidden reasoning</think>"
-            yield "<AID_TOO"
-            yield "L_CALL>{\"name\":\"echo\",\"arguments\":{\"value\":\"ok\"}}</AID_TOOL_CALL>"
+            yield "<too"
+            yield "l_call>{\"name\":\"echo\",\"arguments\":{\"value\":\"ok\"}}</tool_call>"
             return
         yield "Final text"
+
+
+class NewlineToolCallStreamingLLM:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def complete(self, messages, **kwargs):
+        del messages, kwargs
+        raise AssertionError("complete should not be used in this test")
+
+    def complete_stream(self, messages, **kwargs):
+        del messages, kwargs
+        self.calls += 1
+        if self.calls == 1:
+            yield (
+                "Antes del tool call "
+                "<tool_call\n>{\"name\":\"echo\",\"arguments\":{\"value\":\"ok\"}}</tool_call>"
+            )
+            return
+        yield "Respuesta final"
 
 
 class LoopingToolCallLLM:
     def complete(self, messages, **kwargs):
         del messages, kwargs
-        return "<AID_TOOL_CALL>{\"name\":\"echo\",\"arguments\":{\"value\":\"ok\"}}</AID_TOOL_CALL>"
+        return "<tool_call>{\"name\":\"echo\",\"arguments\":{\"value\":\"ok\"}}</tool_call>"
 
 
 class SnapshotStreamingLLM:
@@ -90,6 +110,20 @@ class InfiniteSameChunkStreamingLLM:
 
     def stop_stream(self) -> None:
         self.stopped = True
+
+
+class FailingOnceLLM:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.messages_by_call: list[list[dict]] = []
+
+    def complete(self, messages, **kwargs):
+        del kwargs
+        self.calls += 1
+        self.messages_by_call.append(messages)
+        if self.calls == 1:
+            raise RuntimeError("provider exploded")
+        return "respuesta despues del error"
 
 
 def test_engine_executes_tool_and_persists_outputs(tmp_path):
@@ -299,13 +333,17 @@ def test_engine_streams_visible_text_and_filters_tool_blocks(tmp_path):
     assert result.response == "Preface\nFinal text"
     streamed = "".join(chunks)
     assert streamed == "Preface Final text"
-    assert "<AID_TOOL_CALL>" not in streamed
+    assert "<tool_call>" not in streamed
     assert "<think>" not in streamed
     starts = [item for item in artifacts if item.get("event") == "start"]
     assert [item["type"] for item in starts] == ["think", "tool_call"]
     assert [item["offset"] for item in starts] == [8, 8]
     assert any(item.get("event") == "chunk" and item.get("artifact_id") == "r1-a1" for item in artifacts)
     assert any(item.get("event") == "end" and item.get("artifact_id") == "r1-a2" for item in artifacts)
+    assert any(
+        item.get("event") == "chunk" and "Tool response (JSON):" in str(item.get("content", ""))
+        for item in artifacts
+    )
 
 
 def test_engine_breaks_repeated_identical_tool_call_loop(tmp_path):
@@ -403,6 +441,106 @@ def test_engine_executes_legacy_tool_call_with_wrapped_tag_name(tmp_path):
     assert result.response == "Final wrapped answer"
 
 
+def test_engine_parses_legacy_inline_name_plus_json_arguments(tmp_path):
+    history_store = JsonlStore(tmp_path / ".aidzero" / "store" / "history.jsonl")
+    output_store = JsonlStore(tmp_path / ".aidzero" / "store" / "output.jsonl")
+    memory = MemoryStore(tmp_path / ".aidzero" / "memory.json")
+    captured: dict[str, str] = {}
+    tools = ToolRegistry()
+    tools.register(
+        name="sandbox_run",
+        description="Run shell command",
+        parameters={"type": "object"},
+        execute=lambda args: captured.update(args) or {"ok": True},
+    )
+    llm = SequentialLLM(
+        [
+            "<tool_call>sandbox_run{\"command\":\"vlc\"}</arg_value></tool_call>",
+            "Final inline legacy answer",
+        ]
+    )
+    engine = AgentEngine(
+        repo_root=tmp_path,
+        llm=llm,
+        tools=tools,
+        history_store=history_store,
+        memory_store=memory,
+        output_store=output_store,
+    )
+
+    result = engine.run_event(
+        TriggerEvent(kind="interactive", source="test", prompt="run vlc"),
+    )
+
+    assert result.used_tools == ["sandbox_run"]
+    assert captured == {"command": "vlc"}
+    assert result.response == "Final inline legacy answer"
+
+
+def test_engine_executes_tool_call_with_spaced_tag(tmp_path):
+    history_store = JsonlStore(tmp_path / ".aidzero" / "store" / "history.jsonl")
+    output_store = JsonlStore(tmp_path / ".aidzero" / "store" / "output.jsonl")
+    memory = MemoryStore(tmp_path / ".aidzero" / "memory.json")
+    tools = ToolRegistry()
+    tools.register(
+        name="echo",
+        description="Echo tool",
+        parameters={"type": "object"},
+        execute=lambda args: {"echo": args.get("value")},
+    )
+    llm = SequentialLLM(
+        [
+            "< tool_call>{\"name\":\"echo\",\"arguments\":{\"value\":\"ok\"}}</tool_call>",
+            "Final spaced-tag answer",
+        ]
+    )
+    engine = AgentEngine(
+        repo_root=tmp_path,
+        llm=llm,
+        tools=tools,
+        history_store=history_store,
+        memory_store=memory,
+        output_store=output_store,
+    )
+
+    result = engine.run_event(TriggerEvent(kind="interactive", source="test", prompt="spaced tag"))
+
+    assert result.used_tools == ["echo"]
+    assert result.response == "Final spaced-tag answer"
+
+
+def test_engine_executes_tool_call_without_closing_tag_when_json_is_complete(tmp_path):
+    history_store = JsonlStore(tmp_path / ".aidzero" / "store" / "history.jsonl")
+    output_store = JsonlStore(tmp_path / ".aidzero" / "store" / "output.jsonl")
+    memory = MemoryStore(tmp_path / ".aidzero" / "memory.json")
+    tools = ToolRegistry()
+    tools.register(
+        name="echo",
+        description="Echo tool",
+        parameters={"type": "object"},
+        execute=lambda args: {"echo": args.get("value")},
+    )
+    llm = SequentialLLM(
+        [
+            "<tool_call>{\"name\":\"echo\",\"arguments\":{\"value\":\"ok\"}}",
+            "Final answer after unclosed tag",
+        ]
+    )
+    engine = AgentEngine(
+        repo_root=tmp_path,
+        llm=llm,
+        tools=tools,
+        history_store=history_store,
+        memory_store=memory,
+        output_store=output_store,
+    )
+
+    result = engine.run_event(TriggerEvent(kind="interactive", source="test", prompt="run unclosed"))
+
+    assert result.used_tools == ["echo"]
+    assert result.response == "Final answer after unclosed tag"
+
+
 def test_engine_handles_snapshot_stream_without_duplication(tmp_path):
     history_store = JsonlStore(tmp_path / ".aidzero" / "store" / "history.jsonl")
     output_store = JsonlStore(tmp_path / ".aidzero" / "store" / "output.jsonl")
@@ -433,7 +571,7 @@ def test_engine_handles_snapshot_stream_without_duplication(tmp_path):
     assert "".join(chunks) == "Hola"
 
 
-def test_engine_includes_prior_turns_in_conversation_order(tmp_path):
+def test_engine_includes_prior_turns_in_current_session_messages(tmp_path):
     history_store = JsonlStore(tmp_path / ".aidzero" / "store" / "history.jsonl")
     output_store = JsonlStore(tmp_path / ".aidzero" / "store" / "output.jsonl")
     memory = MemoryStore(tmp_path / ".aidzero" / "memory.json")
@@ -458,12 +596,69 @@ def test_engine_includes_prior_turns_in_conversation_order(tmp_path):
     engine.run_event(TriggerEvent(kind="interactive", source="terminal", prompt="prompt 2"))
 
     second_messages = llm.messages_by_call[1]
-    # system, prompt1, response1, prompt2
     roles = [item["role"] for item in second_messages]
     assert roles == ["system", "user", "assistant", "user"]
     assert second_messages[1]["content"] == "prompt 1"
     assert second_messages[2]["content"] == "respuesta1"
     assert second_messages[3]["content"] == "prompt 2"
+
+
+def test_engine_reset_session_clears_prior_turns(tmp_path):
+    history_store = JsonlStore(tmp_path / ".aidzero" / "store" / "history.jsonl")
+    output_store = JsonlStore(tmp_path / ".aidzero" / "store" / "output.jsonl")
+    memory = MemoryStore(tmp_path / ".aidzero" / "memory.json")
+    tools = ToolRegistry()
+    llm = SequentialLLM(["respuesta1", "respuesta2", "respuesta3"])
+    engine = AgentEngine(
+        repo_root=tmp_path,
+        llm=llm,
+        tools=tools,
+        history_store=history_store,
+        memory_store=memory,
+        output_store=output_store,
+    )
+
+    engine.run_event(TriggerEvent(kind="interactive", source="terminal", prompt="prompt 1"))
+    engine.run_event(TriggerEvent(kind="interactive", source="terminal", prompt="prompt 2"))
+    engine.reset_session()
+    engine.run_event(TriggerEvent(kind="interactive", source="terminal", prompt="prompt 3"))
+
+    third_messages = llm.messages_by_call[2]
+    roles = [item["role"] for item in third_messages]
+    assert roles == ["system", "user"]
+    assert third_messages[1]["content"] == "prompt 3"
+
+
+def test_engine_emits_embedded_artifacts_when_stream_parser_misses_tag_variant(tmp_path):
+    history_store = JsonlStore(tmp_path / ".aidzero" / "store" / "history.jsonl")
+    output_store = JsonlStore(tmp_path / ".aidzero" / "store" / "output.jsonl")
+    memory = MemoryStore(tmp_path / ".aidzero" / "memory.json")
+    tools = ToolRegistry()
+    tools.register(
+        name="echo",
+        description="Echo tool",
+        parameters={"type": "object"},
+        execute=lambda args: {"echo": args.get("value")},
+    )
+    engine = AgentEngine(
+        repo_root=tmp_path,
+        llm=NewlineToolCallStreamingLLM(),
+        tools=tools,
+        history_store=history_store,
+        memory_store=memory,
+        output_store=output_store,
+    )
+
+    streamed: list[str] = []
+    artifacts: list[dict] = []
+    result = engine.run_event(
+        TriggerEvent(kind="interactive", source="test", prompt="run"),
+        on_stream=streamed.append,
+        on_artifact=artifacts.append,
+    )
+
+    assert result.used_tools == ["echo"]
+    assert any(item.get("type") == "tool_call" for item in artifacts)
 
 
 def test_engine_breaks_infinite_same_chunk_stream(tmp_path):
@@ -495,3 +690,34 @@ def test_engine_breaks_infinite_same_chunk_stream(tmp_path):
     assert llm.stopped is True
     assert result.response == "Hola"
     assert "".join(chunks) == "Hola"
+
+
+def test_engine_keeps_failed_user_prompt_in_session_context(tmp_path):
+    history_store = JsonlStore(tmp_path / ".aidzero" / "store" / "history.jsonl")
+    output_store = JsonlStore(tmp_path / ".aidzero" / "store" / "output.jsonl")
+    memory = MemoryStore(tmp_path / ".aidzero" / "memory.json")
+    tools = ToolRegistry()
+    llm = FailingOnceLLM()
+    engine = AgentEngine(
+        repo_root=tmp_path,
+        llm=llm,
+        tools=tools,
+        history_store=history_store,
+        memory_store=memory,
+        output_store=output_store,
+    )
+
+    try:
+        engine.run_event(TriggerEvent(kind="interactive", source="terminal", prompt="primer prompt"))
+        assert False, "Expected provider failure in first call"
+    except RuntimeError as error:
+        assert "provider exploded" in str(error)
+
+    result = engine.run_event(TriggerEvent(kind="interactive", source="terminal", prompt="segundo prompt"))
+
+    assert result.response == "respuesta despues del error"
+    second_call_messages = llm.messages_by_call[1]
+    roles = [item["role"] for item in second_call_messages]
+    assert roles == ["system", "user", "user"]
+    assert second_call_messages[1]["content"] == "primer prompt"
+    assert second_call_messages[2]["content"] == "segundo prompt"

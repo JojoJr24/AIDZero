@@ -1,111 +1,75 @@
-# AIDZero Runtime
+# AIDZero Runtime (v0.2.0)
 
-This repository contains a modular LLM agent runtime built for AIDZero.
+AIDZero is a modular runtime for LLM agents with dynamic UI loading, pluggable provider adapters, local/MCP tools, and agent profiles.
 
-## Implemented Architecture
+## What This App Does
 
-- **Dynamic UI runtime**
-  - UIs are loaded dynamically from `UI/<name>/entrypoint.py`
-  - each UI entrypoint exposes `run_ui(...)`
-- **Gateway triggers**
-  - `heartbeat` from `HEARTBEAT.md`
-  - `cron` from `.aidzero/cron_prompt.txt`
-  - `messengers` inbox from `.aidzero/inbox/messages.jsonl`
-  - `webhooks` inbox from `.aidzero/inbox/webhooks.jsonl`
-  - `interactive` prompts from terminal UI
-- **Injected every turn**
-  - system prompt
-  - tool schemas
-  - JSONL history
-  - memory snapshot
-- **Tool runtime**
-  - tools are loaded dynamically from `TOOLS/*.py` (one `.py` file per tool)
-  - sandbox command execution
-  - file read/write/list tools
-  - persistent memory tools
-  - computer-control tool (open_url, type_text, key_press, mouse, screenshot, run)
-  - MCP gateway client tools (`mcp_health`, `mcp_search_tools`, `mcp_describe_tool`, `mcp_call_tool`)
-  - skill tools (`list_skills`, `read_skill`, `run_skill_script`)
-- **Outputs**
-  - `.aidzero/store/history.jsonl`
-  - `.aidzero/store/output.jsonl`
-  - `.aidzero/output/latest.txt`
-  - `.aidzero/memory.json`
+- Runs an agent loop with tool calling and optional streaming.
+- Loads runnable UIs dynamically from `UI/<name>/entrypoint.py`.
+- Supports multiple model providers through `LLMProviders/` adapters.
+- Uses `Agents/*.json` profiles to control runtime defaults and feature flags.
+- Persists runtime artifacts under `.aidzero/` (history, outputs, memory, active profile).
+- Integrates an MCP tool gateway (`tool_search`, `tool_describe`, `tool_call`).
+
+## Key Runtime Concepts
+
+- Trigger source: interactive UI events collected through `core/gateway.py`.
+- Tool priority policy:
+  1. Local tools (`TOOLS/*.py`)
+  2. Skills (`SKILLS/` via skill tools)
+  3. MCP gateway tools
+- History and memory can be enabled/disabled per profile.
 
 ## Run
 
 ```bash
-uv run AIDZero.py --list-options
-uv run AIDZero.py --provider openai --model gpt-4o-mini --ui terminal
-uv run AIDZero.py --provider openai --model gpt-4o-mini --ui terminal --request "Summarize repo"
-uv run AIDZero.py --provider openai --model gpt-4o-mini --ui terminal --trigger all
+# Main launcher (uses active profile defaults)
+uv run AIDZero.py
+uv run AIDZero.py --request "Summarize this repository"
+uv run AIDZero.py --agent default --request "List available tools"
+
+# Split runtime: core only
+uv run aidzero-core --agent default --host 0.0.0.0 --port 8765
+
+# Split runtime: UI only (connect to existing core)
+uv run aidzero-ui --ui tui --core-url http://127.0.0.1:8765
+
+# All in one (core + UI)
+uv run aidzero-all --ui tui --agent default --host 127.0.0.1 --port 8765
 ```
 
-## Trigger Setup (TUI)
+## Project Layout
 
-From the TUI you can configure trigger integrations with `/setup`:
+- `AIDZero.py`: root runtime launcher.
+- `core/`: engine, gateway, API server/client, split launchers, runtime wiring.
+- `UI/tui/`: Textual UI entrypoint and app runtime.
+- `LLMProviders/`: provider adapters (OpenAI, Claude, Gemini, local providers, etc.).
+- `TOOLS/`: local tool plugins (`TOOL_NAME`, schema, `run(...)`).
+- `MCP/tool-gateway/`: Python MCP gateway implementation.
+- `Agents/`: profile and prompt definitions.
+- `tests/`: test suite.
 
-```text
-/setup cron */5 * * * *
-/setup heartbeat */1 * * * *
-/setup message-origin zendesk .aidzero/inbox/zendesk.jsonl
-/setup webhook-origin stripe .aidzero/inbox/stripe.jsonl
-/setup show
-```
-
-This generates:
-
-- `.aidzero/scripts/run_cron.sh`
-- `.aidzero/scripts/run_heartbeat.sh`
-- `.aidzero/setup/aidzero.crontab`
-- `.aidzero/setup/install_cron.sh`
-- `.aidzero/trigger_sources.json`
-
-Install cron jobs with:
+## MCP Gateway Quick Check
 
 ```bash
-bash .aidzero/setup/install_cron.sh
+bash MCP/run-tool-gateway.sh
+.venv/bin/python MCP/tool-gateway/scripts/gateway-call.py --tool tool_search --payload '{"query":"list available tools","limit":3}'
 ```
 
-## Agent Profiles (`Agents/*.json`)
+## Profiles
 
-- Runtime profiles are loaded from `Agents/*.json`.
-- Active profile is persisted in `.aidzero/agent_profile.json`.
-- Each profile can define:
-  - `system_prompt_file` or `system_prompt`
-  - `system_prompt_file` must point to a file inside `Agents/`
-  - `features.memory`: `true|false` to enable/disable memory tools/store
-  - `features.history`: `true|false` to enable/disable runtime + prompt history
-  - `modules.tools`: `"all"` or a list of tool names (`TOOL_NAME`)
-  - `modules.dash`: `"all"` or a list of DASH module names (`DASH/<name>.py`)
+Profiles are loaded from `Agents/*.json` and persist active selection in `.aidzero/agent_profile.json`.
 
-Included examples:
+Each profile can define:
+- `system_prompt_file` or inline `system_prompt`
+- runtime defaults: `ui`, `provider`, `model`
+- features: `memory`, `history`
+- module allowlists: `tools`, `dash`
 
-- `Agents/default.json`: current default runtime behavior
-- `Agents/planificador.json`: planning-focused profile with restricted tools
+## Outputs and State
 
-Switch profile inside the TUI with:
-
-```text
-/agente
-/agente list
-/agente planificador
-/agente default
-```
-
-## Tool Call Format
-
-The LLM must call tools with:
-
-```text
-<AID_TOOL_CALL>{"name":"sandbox_run","arguments":{"command":"ls -la"}}</AID_TOOL_CALL>
-```
-
-## Tool Plugin Contract
-
-Each file in `TOOLS/*.py` must expose:
-
-- `TOOL_NAME: str`
-- `TOOL_DESCRIPTION: str`
-- `TOOL_PARAMETERS: dict` (JSON-schema-like params)
-- `run(arguments: dict, *, repo_root: Path, memory: MemoryStore) -> Any`
+- `.aidzero/store/history.jsonl`
+- `.aidzero/store/output.jsonl`
+- `.aidzero/output/latest.txt`
+- `.aidzero/memory.json`
+- `.aidzero/agent_profile.json`

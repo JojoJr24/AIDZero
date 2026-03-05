@@ -32,9 +32,38 @@ def run(arguments: dict[str, Any], *, repo_root, memory):
         payload["forceRefresh"] = bool(arguments["force_refresh"])
 
     timeout = normalize_timeout(arguments, default=60, maximum=180)
-    return call_gateway_tool(
-        repo_root=repo_root,
-        gateway_tool="tool_describe",
-        payload=payload,
-        timeout_seconds=timeout,
-    )
+    try:
+        raw = call_gateway_tool(
+            repo_root=repo_root,
+            gateway_tool="tool_describe",
+            payload=payload,
+            timeout_seconds=timeout,
+        )
+    except Exception as error:
+        return {"error": {"message": str(error) or "unknown error"}}
+
+    if bool(raw.get("isError")):
+        return {"error": _gateway_error(raw, default_message="tool_describe failed")}
+
+    structured = raw.get("structuredContent")
+    if isinstance(structured, dict):
+        return {"result": structured}
+    return {"result": raw}
+
+
+def _gateway_error(raw: dict[str, Any], *, default_message: str) -> dict[str, Any]:
+    structured = raw.get("structuredContent")
+    if isinstance(structured, dict):
+        error_value = structured.get("error")
+        if isinstance(error_value, dict):
+            return error_value
+        if isinstance(error_value, str) and error_value.strip():
+            return {"message": error_value.strip()}
+    content = raw.get("content")
+    if isinstance(content, list):
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                text = block.get("text")
+                if isinstance(text, str) and text.strip():
+                    return {"message": text.strip()}
+    return {"message": default_message}
