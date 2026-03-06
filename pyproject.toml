@@ -23,16 +23,16 @@ dev = [
 
 [project.scripts]
 aidzero = "AIDZero:main"
-aidzero-core = "core.api_server:main"
-aidzero-ui = "core.ui_launcher:main"
-aidzero-all = "core.all_launcher:main"
+aidzero-core = "CORE.api_server:main"
+aidzero-ui = "CORE.ui_launcher:main"
+aidzero-all = "CORE.all_launcher:main"
 
 [tool.setuptools]
 py-modules = ["AIDZero"]
 
 [tool.setuptools.packages.find]
 where = ["AIDZeroCode"]
-include = ["core*", "DASH*", "TOOLS*", "LLMProviders*", "UI*"]
+include = ["CORE*", "DASH*", "TOOLS*", "LLMProviders*", "UI*"]
 namespaces = true
 
 [tool.pytest.ini_options]

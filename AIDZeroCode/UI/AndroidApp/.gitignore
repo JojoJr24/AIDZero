@@ -1,0 +1,19 @@
+# Local SDK and machine-specific config
+local.properties
+
+# Gradle state and build outputs
+.gradle/
+build/
+app/build/
+
+# IDE files
+.idea/
+*.iml
+
+# Android Studio captures
+captures/
+
+# Native and signing artifacts kept local
+.cxx/
+*.keystore
+*.jks
