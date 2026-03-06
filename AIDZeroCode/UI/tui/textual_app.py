@@ -56,99 +56,142 @@ class _PromptTextArea(TextArea):
 
 
 class _TextualTUI(App[int]):
-    _INPUT_MIN_HEIGHT = 3
-    _INPUT_MAX_HEIGHT = 12
+    _INPUT_MIN_HEIGHT = 2
+    _INPUT_MAX_HEIGHT = 8
 
     CSS = """
     Screen {
       layout: vertical;
-      background: $surface-darken-1;
+      background: $surface-darken-2;
+      color: $text;
     }
-    #status {
-      height: 1;
+    #hero {
+      height: auto;
+      margin: 0 0 1 0;
       padding: 0 1;
-      background: $accent-darken-2;
+      background: $panel-darken-1;
+      border-bottom: solid $primary-lighten-1;
+    }
+    #hero-title {
       color: $text;
       text-style: bold;
+      padding: 0;
+    }
+    #status {
+      margin: 0;
+      padding: 0 1;
+      height: auto;
+      color: $accent-lighten-1;
+      background: $surface-darken-1;
     }
     #messages {
       height: 1fr;
       padding: 0 1;
     }
-    #input {
-      dock: bottom;
-      height: 3;
-      margin: 0 1 1 1;
-      background: $panel-darken-1;
-    }
-    #command-selector {
-      dock: bottom;
-      margin: 0 1 4 1;
-      display: none;
-      max-height: 12;
-      background: $panel-darken-1;
-    }
-    #command-selector.-visible {
-      display: block;
-    }
-    #history-selector {
-      layer: overlay;
-      width: 88%;
-      height: auto;
-      max-height: 16;
-      margin: 0 0 6 0;
-      align-horizontal: center;
-      background: $panel-darken-1;
+    #empty-state {
+      margin: 0 0 1 0;
       padding: 0 1;
+      background: $surface-darken-1;
+      color: $text-muted;
+      height: auto;
+    }
+    .overlay-window {
+      overlay: screen;
+      position: absolute;
+      width: 94%;
+      height: auto;
+      max-height: 14;
+      margin: 0;
+      padding: 0 1;
+      background: $panel-darken-1;
       display: none;
     }
-    #history-selector.-visible {
+    .overlay-window.-visible {
       display: block;
+    }
+    #command-panel {
+      border: round $accent;
+    }
+    #history-panel {
+      border: round $warning;
+    }
+    .selector-title {
+      color: $text;
+      text-style: bold;
+      padding: 0 0 1 0;
+    }
+    #command-selector,
+    #history-selector {
+      height: auto;
+      max-height: 10;
+      background: transparent;
+      border: none;
+      padding: 0;
+    }
+    #composer {
+      dock: bottom;
+      margin: 0 1 1 1;
+      padding: 0 1;
+      height: auto;
+      background: $panel-darken-1;
+      border-top: solid $primary;
+    }
+    #composer-title {
+      color: $text;
+      text-style: bold;
+      padding: 0;
+    }
+    #input {
+      height: 2;
+      margin: 0;
+      background: $surface-darken-1;
+      border: none;
     }
     .user-prompt {
-      color: $success;
+      color: $text;
       background: $panel-darken-1;
-      margin: 0;
+      margin: 0 0 1 0;
       padding: 0 1;
       height: auto;
     }
     .resp-body-wrap {
       margin: 0;
-      padding: 0;
+      padding: 0 1 1 1;
       height: auto;
     }
     .response-block {
-      margin: 0;
+      margin: 0 0 1 0;
       padding: 0;
       background: $panel;
       height: auto;
     }
     .resp-header {
-      height: 1;
+      height: auto;
       color: $accent-lighten-1;
       margin: 0;
       padding: 0 1;
       background: $panel-darken-1;
+      text-style: bold;
     }
     .resp-body {
       margin: 0;
-      padding: 0 1;
+      padding: 0;
       color: $text;
     }
     .resp-footer {
       color: $warning-lighten-1;
       margin: 0;
       padding: 0 1;
-      background: $panel-darken-1;
+      background: $surface-darken-1;
     }
     .system-line {
       color: $text-muted;
-      background: $surface;
-      margin: 0;
+      background: $surface-darken-1;
+      margin: 0 0 1 0;
       padding: 0 1;
     }
     .artifact {
-      margin: 0;
+      margin: 1 0 1 0;
       padding: 0;
       background: $panel-darken-1;
     }
@@ -157,6 +200,8 @@ class _TextualTUI(App[int]):
     BINDINGS = [
         ("ctrl+q", "quit", "Quit"),
         ("ctrl+s", "stop_generation", "Stop"),
+        ("ctrl+r", "show_history", "History"),
+        ("ctrl+n", "new_conversation", "New Chat"),
         ("ctrl+up", "scroll_messages_up", "Scroll Up"),
         ("ctrl+down", "scroll_messages_down", "Scroll Down"),
         ("ctrl+pageup", "scroll_messages_page_up", "Page Up"),
@@ -198,21 +243,31 @@ class _TextualTUI(App[int]):
         )
 
     def compose(self) -> ComposeResult:
-        yield Static("", id="status", markup=False)
-        yield VerticalScroll(id="messages")
-        yield OptionList(id="command-selector")
-        yield OptionList(id="history-selector")
-        yield _PromptTextArea(
-            "",
-            id="input",
-            placeholder="Type a prompt, /new, /history, /exit",
-            soft_wrap=True,
-            show_line_numbers=False,
-        )
+        with Vertical(id="hero"):
+            yield Static("", id="hero-title", markup=False)
+            yield Static("", id="status", markup=False)
+        with VerticalScroll(id="messages"):
+            yield Static("", id="empty-state", markup=False)
+        with Vertical(id="command-panel", classes="overlay-window"):
+            yield Static("Commands | / open | Tab apply | Esc close", classes="selector-title", markup=False)
+            yield OptionList(id="command-selector")
+        with Vertical(id="history-panel", classes="overlay-window"):
+            yield Static("History | Enter reuse | Esc close", classes="selector-title", markup=False)
+            yield OptionList(id="history-selector")
+        with Vertical(id="composer"):
+            yield Static("", id="composer-title", markup=False)
+            yield _PromptTextArea(
+                "",
+                id="input",
+                placeholder="Prompt or /command",
+                soft_wrap=True,
+                show_line_numbers=False,
+            )
         yield Footer()
 
     def on_mount(self) -> None:
         self._reset_engine_session()
+        self._refresh_ui_copy()
         self._update_status()
         self._resize_input_to_content()
         self.query_one("#input", TextArea).focus()
@@ -277,6 +332,11 @@ class _TextualTUI(App[int]):
             self.query_one("#input", TextArea).focus()
             event.stop()
             return
+        if event.key == "escape" and self._is_command_selector_visible():
+            self._hide_command_selector()
+            self.query_one("#input", TextArea).focus()
+            event.stop()
+            return
 
         input_widget = self.query_one("#input", TextArea)
         if self.focused is not input_widget:
@@ -305,6 +365,7 @@ class _TextualTUI(App[int]):
         if not self._busy:
             return
         self._stop_requested = True
+        self._update_status()
         stop_stream = getattr(self.engine.llm, "stop_stream", None)
         if callable(stop_stream):
             try:
@@ -321,6 +382,12 @@ class _TextualTUI(App[int]):
         input_widget.insert(event.text)
         self._resize_input_to_content()
         event.stop()
+
+    def on_resize(self, event: events.Resize) -> None:
+        del event
+        if not self._has_dom():
+            return
+        self.call_after_refresh(self._recenter_visible_overlays)
 
     def on_mouse_scroll_up(self, event: events.MouseScrollUp) -> None:
         self._scroll_messages_lines(-3)
@@ -352,6 +419,12 @@ class _TextualTUI(App[int]):
         messages = self.query_one("#messages", VerticalScroll)
         messages.scroll_end(animate=False)
 
+    def action_show_history(self) -> None:
+        self._show_history_selector(limit=30)
+
+    def action_new_conversation(self) -> None:
+        self.start_new_conversation()
+
     def _scroll_messages_lines(self, delta: int) -> None:
         messages = self.query_one("#messages", VerticalScroll)
         messages.scroll_relative(y=delta, animate=False)
@@ -360,7 +433,7 @@ class _TextualTUI(App[int]):
         input_widget = self.query_one("#input", TextArea)
         text = input_widget.text
         line_count = max(1, text.count("\n") + 1)
-        desired_height = line_count + 2
+        desired_height = line_count + 1
         clamped_height = max(self._INPUT_MIN_HEIGHT, min(self._INPUT_MAX_HEIGHT, desired_height))
         input_widget.styles.height = clamped_height
 
@@ -381,8 +454,9 @@ class _TextualTUI(App[int]):
 
     def _append_system_line(self, text: str) -> None:
         messages = self.query_one("#messages", VerticalScroll)
+        self._clear_empty_state()
         row = Static(
-            f"{datetime.now().strftime('%H:%M:%S')}  system  {text}",
+            f"{datetime.now().strftime('%H:%M:%S')} sys | {text}",
             classes="system-line",
             markup=False,
         )
@@ -392,6 +466,7 @@ class _TextualTUI(App[int]):
     def start_new_conversation(self) -> None:
         if self._busy:
             self._stop_requested = True
+            self._update_status()
             stop_stream = getattr(self.engine.llm, "stop_stream", None)
             if callable(stop_stream):
                 try:
@@ -406,6 +481,8 @@ class _TextualTUI(App[int]):
 
         messages = self.query_one("#messages", VerticalScroll)
         messages.remove_children()
+        self._ensure_empty_state()
+        messages.scroll_home(animate=False)
 
         input_widget = self.query_one("#input", TextArea)
         input_widget.clear()
@@ -424,16 +501,108 @@ class _TextualTUI(App[int]):
         except Exception as error:  # noqa: BLE001
             self._append_system_line(f"Session reset failed: {error}")
 
+    def _refresh_ui_copy(self) -> None:
+        if not self._has_dom():
+            return
+        self.query_one("#hero-title", Static).update(self._build_header_text())
+        self.query_one("#composer-title", Static).update(self._build_composer_hint())
+        existing = list(self.query("#empty-state"))
+        if existing:
+            existing[0].update(self._build_welcome_text())
+
+    def _build_header_text(self) -> str:
+        return f"AIDZero TUI | agent {self.agent_profile.name}"
+
+    def _build_composer_hint(self) -> str:
+        return "Prompt | Enter send | Ctrl+J newline | / commands | Ctrl+R history | Ctrl+N new"
+
+    def _build_status_text(self) -> str:
+        state = "stopping" if self._stop_requested else "busy" if self._busy else "idle"
+        history_enabled = bool(getattr(self.history, "enabled", True))
+        memory_store = getattr(self.engine, "memory_store", None)
+        memory_enabled = bool(getattr(memory_store, "enabled", True)) if memory_store is not None else True
+        now = datetime.now().strftime("%H:%M:%S")
+        parts = [
+            state,
+            f"history:{'on' if history_enabled else 'off'}",
+            f"memory:{'on' if memory_enabled else 'off'}",
+        ]
+        if self.active_trigger != "interactive":
+            parts.append(f"trigger:{self.active_trigger}")
+        parts.append(now)
+        return " | ".join(parts)
+
+    def _build_welcome_text(self) -> str:
+        command_names = [command for command, _ in self.dash_commands.suggestions("/")]
+        if not command_names:
+            command_names = ["/new", "/history", "/exit"]
+        preview = ", ".join(command_names[:5])
+        return (
+            "Ready. Type a prompt or / to browse commands.\n"
+            f"Commands: {preview} | Ctrl+R history | Ctrl+N new"
+        )
+
+    def _ensure_empty_state(self) -> None:
+        if not self._has_dom():
+            return
+        messages = self.query_one("#messages", VerticalScroll)
+        existing = list(self.query("#empty-state"))
+        if existing:
+            existing[0].update(self._build_welcome_text())
+            return
+        messages.mount(Static(self._build_welcome_text(), id="empty-state", markup=False))
+
+    def _clear_empty_state(self) -> None:
+        if not self._has_dom():
+            return
+        for widget in list(self.query("#empty-state")):
+            widget.remove()
+
     def _update_status(self) -> None:
+        if not self._has_dom():
+            return
         status = self.query_one("#status", Static)
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        status.update(f"agent={self.agent_profile.name}  trigger=interactive  time={now}")
+        self.query_one("#hero-title", Static).update(self._build_header_text())
+        status.update(self._build_status_text())
+
+    def _has_dom(self) -> bool:
+        return hasattr(self, "_compose_screen")
+
+    def _show_overlay(self, panel_id: str) -> None:
+        panel = self.query_one(panel_id, Vertical)
+        panel.offset = (0, 0)
+        panel.add_class("-visible")
+        self.call_after_refresh(lambda: self._center_overlay(panel_id))
+
+    def _hide_overlay(self, panel_id: str) -> None:
+        panel = self.query_one(panel_id, Vertical)
+        panel.offset = (0, 0)
+        panel.remove_class("-visible")
+
+    def _center_overlay(self, panel_id: str) -> None:
+        panel = self.query_one(panel_id, Vertical)
+        width = panel.region.width
+        height = panel.region.height
+        if width <= 0 or height <= 0:
+            return
+        screen_width = self.screen.region.width
+        screen_height = self.screen.region.height
+        target_x = max(0, (screen_width - width) // 2)
+        target_y = max(0, (screen_height - height) // 2)
+        panel.offset = (target_x - panel.region.x, target_y - panel.region.y)
+
+    def _recenter_visible_overlays(self) -> None:
+        if self._is_command_selector_visible():
+            self._center_overlay("#command-panel")
+        if self._is_history_selector_visible():
+            self._center_overlay("#history-panel")
 
     def switch_agent_profile(self, profile_name: str) -> AgentProfile:
         profile = self.agent_manager.set_active_profile(profile_name)
         if bool(getattr(self.agent_manager, "is_remote", False)):
             self.agent_profile = profile
             self._hide_command_selector()
+            self._refresh_ui_copy()
             self._update_status()
             return profile
         tools = build_default_tool_registry(
@@ -453,6 +622,7 @@ class _TextualTUI(App[int]):
         )
         self.agent_profile = profile
         self._hide_command_selector()
+        self._refresh_ui_copy()
         self._update_status()
         return profile
 
@@ -471,15 +641,14 @@ class _TextualTUI(App[int]):
             selector.add_option(f"{command}  -  {description}")
         selector.highlighted = 0
         self._command_matches = [command for command, _ in matches]
-        selector.add_class("-visible")
+        self._show_overlay("#command-panel")
 
     def _hide_command_selector(self) -> None:
-        selector = self.query_one("#command-selector", OptionList)
-        selector.remove_class("-visible")
+        self._hide_overlay("#command-panel")
         self._command_matches = []
 
     def _is_command_selector_visible(self) -> bool:
-        return self.query_one("#command-selector", OptionList).has_class("-visible")
+        return self.query_one("#command-panel", Vertical).has_class("-visible")
 
     def _show_history_selector(self, *, limit: int = 30) -> bool:
         prompts = self.history.list_prompts(limit=limit)
@@ -493,17 +662,16 @@ class _TextualTUI(App[int]):
             selector.add_option(f"{idx:>2}. {one_line}")
         selector.highlighted = 0
         self._history_matches = prompts
-        selector.add_class("-visible")
+        self._show_overlay("#history-panel")
         selector.focus()
         return True
 
     def _hide_history_selector(self) -> None:
-        selector = self.query_one("#history-selector", OptionList)
-        selector.remove_class("-visible")
+        self._hide_overlay("#history-panel")
         self._history_matches = []
 
     def _is_history_selector_visible(self) -> bool:
-        return self.query_one("#history-selector", OptionList).has_class("-visible")
+        return self.query_one("#history-panel", Vertical).has_class("-visible")
 
     def _get_highlighted_history_prompt(self) -> str | None:
         if not self._history_matches:
@@ -544,6 +712,7 @@ class _TextualTUI(App[int]):
         self._append_user_prompt(prompt)
         self._busy = True
         self._stop_requested = False
+        self._update_status()
         self.history.add_prompt(prompt)
         try:
             self.run_worker(
@@ -618,8 +787,9 @@ class _TextualTUI(App[int]):
 
     def _create_response_block(self, response_id: int, kind: str, source: str) -> None:
         messages = self.query_one("#messages", VerticalScroll)
+        self._clear_empty_state()
         header = Static(
-            f"{datetime.now().strftime('%H:%M:%S')}  assistant  kind={kind}  source={source}",
+            f"{datetime.now().strftime('%H:%M:%S')} ai | {kind} | {source}",
             classes="resp-header",
             markup=False,
         )
@@ -691,7 +861,7 @@ class _TextualTUI(App[int]):
                 collapsible.collapsed = True
         self._update_tail_widget(pending)
         footer = Static(
-            f"stats  rounds={rounds}  tools={tools}",
+            f"r={rounds} | tools={tools}",
             classes="resp-footer",
             markup=False,
         )
@@ -783,8 +953,9 @@ class _TextualTUI(App[int]):
 
     def _append_user_prompt(self, prompt: str) -> None:
         messages = self.query_one("#messages", VerticalScroll)
+        self._clear_empty_state()
         line = Static(
-            f"{datetime.now().strftime('%H:%M:%S')}  you  {prompt}",
+            f"{datetime.now().strftime('%H:%M:%S')} you | {prompt}",
             classes="user-prompt",
             markup=False,
         )

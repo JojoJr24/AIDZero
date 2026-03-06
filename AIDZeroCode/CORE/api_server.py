@@ -319,7 +319,7 @@ def serve_core_api(*, repo_root: Path, provider_name: str, model: str, host: str
 def _parse_args() -> Any:
     parser = ArgumentParser(description="Run AIDZero core layer as HTTP API")
     parser.add_argument("--agent", default=None, help="Agent profile name from Agents/*.json")
-    parser.add_argument("--host", default="127.0.0.1", help="Bind host/IP")
+    parser.add_argument("--host", default="0.0.0.0", help="Bind host/IP")
     parser.add_argument("--port", type=int, default=8765, help="Bind port")
     parser.add_argument(
         "--repo-root",

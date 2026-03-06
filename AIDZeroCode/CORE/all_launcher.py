@@ -32,7 +32,7 @@ def _parse_ui_options(raw_items: list[str], trigger: str) -> dict[str, str]:
 def _parse_args() -> Any:
     parser = ArgumentParser(description="Run core API and UI layers together")
     parser.add_argument("--ui", default=None, help="UI name from UI/<name>/entrypoint.py")
-    parser.add_argument("--host", default="127.0.0.1", help="Core bind host/IP")
+    parser.add_argument("--host", default="0.0.0.0", help="Core bind host/IP")
     parser.add_argument("--port", type=int, default=8765, help="Core bind port")
     parser.add_argument("--request", help="Optional one-shot prompt")
     parser.add_argument("--agent", default=None, help="Agent profile name from Agents/*.json")

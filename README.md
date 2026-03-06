@@ -34,10 +34,33 @@ uv run aidzero-core --agent default --host 0.0.0.0 --port 8765
 
 # Split runtime: UI only (connect to existing core)
 uv run aidzero-ui --ui tui --core-url http://127.0.0.1:8765
+uv run aidzero-ui --ui Whatsapp --core-url http://127.0.0.1:8765 --ui-option webhook_host=0.0.0.0 --ui-option webhook_port=8780
 
 # All in one (core + UI)
-uv run aidzero-all --ui tui --agent default --host 127.0.0.1 --port 8765
+uv run aidzero-all --ui tui --agent default --host 0.0.0.0 --port 8765
 ```
+
+## WhatsApp UI
+
+`UI/Whatsapp` exposes a small webhook server that forwards inbound WhatsApp text messages to the core runtime.
+
+Example:
+
+```bash
+uv run aidzero-ui \
+  --ui Whatsapp \
+  --core-url http://127.0.0.1:8765 \
+  --ui-option webhook_host=0.0.0.0 \
+  --ui-option webhook_port=8780 \
+  --ui-option webhook_path=/webhook
+```
+
+Notes:
+- Default webhook bind: `0.0.0.0:8780`
+- Default path: `/webhook`
+- Default reply format: `twiml`
+- Supports `/new` and `/reset` to clear the current session
+- Accepts Twilio-style form payloads and simple JSON payloads for local testing
 
 ## Headless Mode
 
