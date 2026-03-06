@@ -37,12 +37,14 @@ def run_ui(
 
 - Discovery is dynamic through `CORE/ui_registry.py`.
 - Any folder under `UI/` with an `entrypoint.py` becomes selectable through `--ui <Name>`.
+- A folder without `entrypoint.py` can still be selectable when `UI/<Name>/ui.json` declares `"type": "thirdparty"`.
 - The folder name becomes CLI surface. Choose it intentionally and document the exact casing.
 
 ## Runtime Wiring
 
 - For embedded/local core mode, construct runtime state with `CORE.ui_runtime.build_ui_runtime(...)`.
 - For remote-core mode, read `core_url` from `ui_options` and use `CORE.api_client` proxies.
+- For `thirdparty` UIs, do not implement `run_ui(...)`; run only `aidzero-core` (or root launcher with that profile) and connect externally.
 - A UI that can target a remote core should verify connectivity at startup when practical.
 - Reuse the active agent profile from the runtime or remote core instead of loading raw profile files again.
 

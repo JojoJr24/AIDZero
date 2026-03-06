@@ -64,6 +64,10 @@ def main() -> int:
     if ui_name not in ui_registry.names():
         print(f"error> unknown ui '{ui_name}'")
         return 2
+    if ui_registry.ui_type(ui_name) == "thirdparty":
+        print(f"error> ui '{ui_name}' is thirdparty and has no local launcher.")
+        print("tip> Ejecutá aidzero-core y conectá el cliente externo por LAN.")
+        return 2
 
     try:
         ui_options = _parse_ui_options(list(args.ui_option), trigger="interactive")

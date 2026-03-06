@@ -88,3 +88,60 @@ def test_main_headless_uses_default_profile(monkeypatch, tmp_path):
         "model": "gpt-4o-mini",
         "prompt": "prompt desde archivo",
     }
+
+
+def test_main_thirdparty_ui_runs_core_only(monkeypatch):
+    launcher = _load_launcher_module()
+    captured: dict[str, object] = {}
+
+    class _DummyProfileManager:
+        def __init__(self, repo_root):
+            del repo_root
+
+        def get_active_profile(self):
+            return SimpleNamespace(
+                name="default",
+                runtime_ui="AndroidApp",
+                runtime_provider="lmstudio",
+                runtime_model="zai-org/glm-4.7-flash",
+            )
+
+        def set_active_profile(self, name):
+            del name
+            return self.get_active_profile()
+
+    class _DummyRegistry:
+        def __init__(self, repo_root):
+            del repo_root
+
+        def names(self):
+            return ["AndroidApp"]
+
+        def ui_type(self, ui_name):
+            del ui_name
+            return "thirdparty"
+
+    def _fake_serve_core_api(*, repo_root, provider_name, model, host, port):
+        captured["repo_root"] = repo_root
+        captured["provider_name"] = provider_name
+        captured["model"] = model
+        captured["host"] = host
+        captured["port"] = port
+        return 0
+
+    monkeypatch.setattr(launcher, "AgentProfileManager", _DummyProfileManager)
+    monkeypatch.setattr(launcher, "UIRegistry", _DummyRegistry)
+    monkeypatch.setattr(launcher, "_discover_providers", lambda root: ["lmstudio"])
+    monkeypatch.setattr(launcher, "serve_core_api", _fake_serve_core_api)
+    monkeypatch.setattr("sys.argv", ["AIDZero.py"])
+
+    exit_code = launcher.main()
+
+    assert exit_code == 0
+    assert captured == {
+        "repo_root": launcher.REPO_ROOT,
+        "provider_name": "lmstudio",
+        "model": "zai-org/glm-4.7-flash",
+        "host": "0.0.0.0",
+        "port": 8765,
+    }

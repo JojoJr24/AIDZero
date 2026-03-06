@@ -6,6 +6,7 @@ AIDZero is a modular runtime for LLM agents with dynamic UI loading, pluggable p
 
 - Runs an agent loop with tool calling and optional streaming.
 - Loads runnable UIs dynamically from `UI/<name>/entrypoint.py`.
+- Supports external clients as `thirdparty` UIs via `UI/<name>/ui.json`.
 - Supports multiple model providers through `LLMProviders/` adapters.
 - Uses `Agents/*.json` profiles to control runtime defaults and feature flags.
 - Persists runtime artifacts under `.aidzero/` (history, outputs, memory, active profile).
@@ -61,6 +62,19 @@ Notes:
 - Default reply format: `twiml`
 - Supports `/new` and `/reset` to clear the current session
 - Accepts Twilio-style form payloads and simple JSON payloads for local testing
+
+## Third-Party UIs (AndroidApp)
+
+`UI/AndroidApp` is marked as `thirdparty`, so launchers do not try to execute a local Python UI for it.
+
+When the active profile uses `AndroidApp`, `uv run AIDZero.py` runs only the core API on LAN:
+
+```bash
+uv run AIDZero.py
+# core API on http://0.0.0.0:8765
+```
+
+Then connect the Android app to that LAN IP/port.
 
 ## Headless Mode
 
