@@ -1,4 +1,4 @@
-"""Slash command to list/switch active agent profiles from Agents/*.json."""
+"""Slash command to list/switch active agent profiles from Agents/<name>/<name>.json."""
 
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ def run(raw: str, *, app) -> bool:
         names = manager.list_profile_names()
         active_name = getattr(profile, "name", None)
         if not names:
-            _line(app, "No hay perfiles en Agents/*.json")
+            _line(app, "No hay perfiles en Agents/<name>/<name>.json")
             return True
         _line(app, "Agentes disponibles:")
         for name in names:

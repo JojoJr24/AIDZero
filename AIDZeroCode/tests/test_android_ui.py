@@ -26,7 +26,7 @@ class _DummyEngine:
         self.events: list[TriggerEvent] = []
         self.reset_calls = 0
 
-    def run_event(self, event: TriggerEvent, *, max_rounds: int = 6, on_stream=None, on_artifact=None) -> TurnResult:
+    def run_event(self, event: TriggerEvent, *, max_rounds: int = 30, on_stream=None, on_artifact=None) -> TurnResult:
         del max_rounds, on_stream, on_artifact
         self.events.append(event)
         return TurnResult(

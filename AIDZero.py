@@ -36,11 +36,11 @@ class CliArgs:
 def _parse_args() -> CliArgs:
     parser = argparse.ArgumentParser(description="AIDZero runtime launcher.")
     parser.add_argument("--request", help="Prompt to process.")
-    parser.add_argument("--agent", default=None, help="Agent profile name from Agents/*.json.")
+    parser.add_argument("--agent", default=None, help="Agent profile name from Agents/<name>/<name>.json.")
     parser.add_argument(
         "--headless",
         action="store_true",
-        help="Run one-shot using HeadlessPrompt.txt and save output in Results/.",
+        help="Run one-shot using Agents/default/HeadlessPrompt.txt and save output in Results/.",
     )
     parsed = parser.parse_args()
     return CliArgs(
@@ -132,14 +132,8 @@ def _list_provider_models(repo_root: Path, provider_name: str) -> list[str]:
     return unique
 
 
-def _read_headless_prompt(repo_root: Path) -> str:
-    prompt_file = repo_root / "HeadlessPrompt.txt"
-    if not prompt_file.is_file():
-        raise FileNotFoundError(f"Headless prompt file not found: {prompt_file}")
-    prompt = prompt_file.read_text(encoding="utf-8", errors="replace").strip()
-    if not prompt:
-        raise ValueError(f"Headless prompt file is empty: {prompt_file}")
-    return prompt
+def _read_headless_prompt(profile_manager: AgentProfileManager, *, profile_name: str) -> str:
+    return profile_manager.get_headless_prompt(profile_name)
 
 
 def _write_headless_result(repo_root: Path, response: str) -> Path:
@@ -232,7 +226,7 @@ def main() -> int:
 
     if args.headless:
         try:
-            prompt = _read_headless_prompt(repo_root)
+            prompt = _read_headless_prompt(profile_manager, profile_name=active_profile.name)
         except Exception as error:  # noqa: BLE001
             print(f"error> {error}")
             return 2

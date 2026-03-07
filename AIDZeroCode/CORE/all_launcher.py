@@ -36,7 +36,7 @@ def _parse_args() -> Any:
     parser.add_argument("--host", default="0.0.0.0", help="Core bind host/IP")
     parser.add_argument("--port", type=int, default=8765, help="Core bind port")
     parser.add_argument("--request", help="Optional one-shot prompt")
-    parser.add_argument("--agent", default=None, help="Agent profile name from Agents/*.json")
+    parser.add_argument("--agent", default=None, help="Agent profile name from Agents/<name>/<name>.json")
     parser.add_argument(
         "--startup-timeout",
         type=float,

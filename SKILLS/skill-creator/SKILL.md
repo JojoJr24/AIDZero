@@ -1,6 +1,6 @@
 ---
 name: skill-creator
-description: Create or modify an Agent skill with clear triggers, concise workflow instructions, and optional scripts/references/assets. Use when the user asks to build a new skill or refactor an existing one.
+description: Create or modify a Codex skill under SKILLS/ with clear triggers, concise workflow instructions, and optional scripts/references/assets. Use only when the user explicitly asks to build or refactor a skill.
 ---
 
 # Skill Creator
@@ -8,6 +8,12 @@ description: Create or modify an Agent skill with clear triggers, concise workfl
 ## Mission
 
 Design or refactor skills so they are easy to trigger and easy to execute. Keep `SKILL.md` focused on operational steps; move deep detail into `references/`.
+
+## Scope Boundary (Critical)
+
+- This skill is only for `SKILLS/<name>/...`.
+- Do not use this skill to create runtime agent profiles.
+- If the request is about creating/modifying an agent in `Agents/<name>/`, use `agent-creator` instead.
 
 ## Skill Contract
 
@@ -21,12 +27,13 @@ Design or refactor skills so they are easy to trigger and easy to execute. Keep 
 
 ## Standard Execution Flow
 
-1. Collect concrete examples of when the skill should be used.
-2. Decide which reusable artifacts are needed (`scripts`, `references`, `assets`).
-3. Initialize or reorganize the skill folder.
-4. Write a trigger-accurate `description` in frontmatter.
-5. Write the body as a procedural execution guide with clear expected output.
-6. Run `scripts/quick_validate.py` on the skill folder.
+1. Confirm intent is truly "skill creation/refactor" and not "agent profile creation".
+2. Collect concrete examples of when the skill should be used.
+3. Decide which reusable artifacts are needed (`scripts`, `references`, `assets`).
+4. Initialize or reorganize the skill folder.
+5. Write a trigger-accurate `description` in frontmatter.
+6. Write the body as a procedural execution guide with clear expected output.
+7. Run `scripts/quick_validate.py` on the skill folder.
 
 ## Trigger Quality Rules
 

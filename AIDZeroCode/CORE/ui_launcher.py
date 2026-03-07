@@ -29,7 +29,7 @@ def _parse_args() -> Any:
     parser.add_argument("--ui", default=None, help="UI name from UI/<name>/entrypoint.py")
     parser.add_argument("--core-url", default="http://127.0.0.1:8765", help="Core API URL")
     parser.add_argument("--request", help="Optional one-shot prompt")
-    parser.add_argument("--agent", default=None, help="Agent profile name from Agents/*.json")
+    parser.add_argument("--agent", default=None, help="Agent profile name from Agents/<name>/<name>.json")
     parser.add_argument(
         "--ui-option",
         action="append",

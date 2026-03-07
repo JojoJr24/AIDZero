@@ -8,13 +8,14 @@
 ## Project Layout
 - `AIDZero.py`: root launcher for the runtime.
 - `AIDZeroCode/`: canonical runtime implementation.
-- `AIDZeroCode/core/`: engine, gateway, API, runtime wiring.
+- `AIDZeroCode/CORE/`: engine, gateway, API, runtime wiring.
 - `AIDZeroCode/UI/`: runnable UI modules (`UI/<name>/entrypoint.py`).
 - `AIDZeroCode/LLMProviders/`: provider adapters.
 - `AIDZeroCode/TOOLS/`: local tool plugins.
 - `AIDZeroCode/MCP/tool-gateway/`: MCP gateway implementation.
 - `AIDZeroCode/tests/`: automated tests.
-- `Agents/`: runtime profiles and system prompts used by the launcher.
+- `Agents/`: runtime agent profiles and prompts used by the launcher.
+- `SKILLS/`: Codex skills (`SKILLS/<skill>/SKILL.md`).
 
 ## Runtime Commands
 ```bash
@@ -26,10 +27,16 @@ uv run AIDZero.py --headless
 
 ## Headless Mode
 - `--headless` always uses the `default` agent profile.
-- Reads prompt from `HeadlessPrompt.txt` in repo root.
+- Reads prompt from `Agents/default/HeadlessPrompt.txt`.
 - Writes outputs to:
   - `Results/latest.txt`
   - `Results/result_YYYYMMDD_HHMMSS.txt`
+
+## Terminology Guardrails
+- `agent` means runtime profile under `Agents/<name>/` (`<name>.json`, `system_prompt.md`, `HeadlessPrompt.txt`).
+- `skill` means Codex workflow docs/scripts under `SKILLS/<skill_name>/`.
+- If the user asks to create or modify an `agent`, do not create a `skill` unless explicitly requested.
+- For agent creation/edit tasks, load and follow `SKILLS/agent-creator/SKILL.md` before editing `Agents/`.
 
 ## Development Rules
 - Keep code/comments/docs in English.
