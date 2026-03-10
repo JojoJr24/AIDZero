@@ -29,7 +29,7 @@ def _parse_args() -> Any:
     parser.add_argument("--ui", default=None, help="UI name from UI/<name>/entrypoint.py")
     parser.add_argument("--core-url", default="http://127.0.0.1:8765", help="Core API URL")
     parser.add_argument("--request", help="Optional one-shot prompt")
-    parser.add_argument("--agent", default=None, help="Agent profile name from Agents/*.json")
+    parser.add_argument("--agent", default=None, help="Agent profile name from Agents/<name>/<name>.json")
     parser.add_argument(
         "--ui-option",
         action="append",
@@ -63,6 +63,10 @@ def main() -> int:
     ui_name = (str(args.ui).strip() if args.ui else active_profile.runtime_ui)
     if ui_name not in ui_registry.names():
         print(f"error> unknown ui '{ui_name}'")
+        return 2
+    if ui_registry.ui_type(ui_name) == "thirdparty":
+        print(f"error> ui '{ui_name}' is thirdparty and has no local launcher.")
+        print("tip> Ejecutá aidzero-core y conectá el cliente externo por LAN.")
         return 2
 
     try:

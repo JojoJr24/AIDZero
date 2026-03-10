@@ -189,10 +189,10 @@ def test_engine_adds_linux_details_in_system_message(tmp_path, monkeypatch):
         parameters={"type": "object"},
         execute=lambda args: {"echo": args.get("value")},
     )
-    monkeypatch.setattr("core.engine.platform.system", lambda: "Linux")
-    monkeypatch.setattr("core.engine.platform.release", lambda: "6.8.0-test")
+    monkeypatch.setattr("CORE.engine.platform.system", lambda: "Linux")
+    monkeypatch.setattr("CORE.engine.platform.release", lambda: "6.8.0-test")
     monkeypatch.setattr(
-        "core.engine.platform.freedesktop_os_release",
+        "CORE.engine.platform.freedesktop_os_release",
         lambda: {"NAME": "Ubuntu", "VERSION_ID": "24.04"},
     )
 
@@ -601,6 +601,44 @@ def test_engine_includes_prior_turns_in_current_session_messages(tmp_path):
     assert second_messages[1]["content"] == "prompt 1"
     assert second_messages[2]["content"] == "respuesta1"
     assert second_messages[3]["content"] == "prompt 2"
+
+
+def test_engine_preserves_tool_and_think_trace_in_next_turn_context(tmp_path):
+    history_store = JsonlStore(tmp_path / ".aidzero" / "store" / "history.jsonl")
+    output_store = JsonlStore(tmp_path / ".aidzero" / "store" / "output.jsonl")
+    memory = MemoryStore(tmp_path / ".aidzero" / "memory.json")
+    tools = ToolRegistry()
+    tools.register(
+        name="echo",
+        description="Echo tool",
+        parameters={"type": "object"},
+        execute=lambda args: {"echo": args.get("value")},
+    )
+    llm = SequentialLLM(
+        [
+            "<think>plan interno</think>voy a usar herramienta <tool_call>{\"name\":\"echo\",\"arguments\":{\"value\":\"ok\"}}</tool_call>",
+            "respuesta 1",
+            "respuesta 2",
+        ]
+    )
+    engine = AgentEngine(
+        repo_root=tmp_path,
+        llm=llm,
+        tools=tools,
+        history_store=history_store,
+        memory_store=memory,
+        output_store=output_store,
+    )
+
+    engine.run_event(TriggerEvent(kind="interactive", source="terminal", prompt="prompt 1"))
+    engine.run_event(TriggerEvent(kind="interactive", source="terminal", prompt="prompt 2"))
+
+    second_turn_messages = llm.messages_by_call[2]
+    roles = [item["role"] for item in second_turn_messages]
+    assert roles == ["system", "user", "assistant", "user", "assistant", "user"]
+    assert second_turn_messages[2]["content"].find("<tool_call>") != -1
+    assert second_turn_messages[2]["content"].find("<think>") != -1
+    assert "Tool response (JSON):" in second_turn_messages[3]["content"]
 
 
 def test_engine_reset_session_clears_prior_turns(tmp_path):

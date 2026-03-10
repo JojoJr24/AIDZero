@@ -6,8 +6,9 @@ AIDZero is a modular runtime for LLM agents with dynamic UI loading, pluggable p
 
 - Runs an agent loop with tool calling and optional streaming.
 - Loads runnable UIs dynamically from `UI/<name>/entrypoint.py`.
+- Supports external clients as `thirdparty` UIs via `UI/<name>/ui.json`.
 - Supports multiple model providers through `LLMProviders/` adapters.
-- Uses `Agents/*.json` profiles to control runtime defaults and feature flags.
+- Uses `Agents/<name>/<name>.json` profiles to control runtime defaults and feature flags.
 - Persists runtime artifacts under `.aidzero/` (history, outputs, memory, active profile).
 - Integrates an MCP tool gateway (`tool_search`, `tool_describe`, `tool_call`).
 
@@ -62,11 +63,24 @@ Notes:
 - Supports `/new` and `/reset` to clear the current session
 - Accepts Twilio-style form payloads and simple JSON payloads for local testing
 
+## Third-Party UIs (AndroidApp)
+
+`UI/AndroidApp` is marked as `thirdparty`, so launchers do not try to execute a local Python UI for it.
+
+When the active profile uses `AndroidApp`, `uv run AIDZero.py` runs only the core API on LAN:
+
+```bash
+uv run AIDZero.py
+# core API on http://0.0.0.0:8765
+```
+
+Then connect the Android app to that LAN IP/port.
+
 ## Headless Mode
 
 Use headless mode when you want a one-shot run without opening the UI.
 
-1. Create `HeadlessPrompt.txt` in the repository root with your prompt.
+1. Edit `Agents/default/HeadlessPrompt.txt` with your prompt.
 2. Run:
 
 ```bash
@@ -75,7 +89,7 @@ uv run AIDZero.py --headless
 
 Behavior:
 - Uses the `default` agent profile.
-- Reads input from `HeadlessPrompt.txt`.
+- Reads input from `Agents/default/HeadlessPrompt.txt`.
 - Writes output to:
   - `Results/latest.txt`
   - `Results/result_YYYYMMDD_HHMMSS.txt`
@@ -100,7 +114,7 @@ bash MCP/run-tool-gateway.sh
 
 ## Profiles
 
-Profiles are loaded from `Agents/*.json` and persist active selection in `.aidzero/agent_profile.json`.
+Profiles are loaded from `Agents/<name>/<name>.json` and persist active selection in `.aidzero/agent_profile.json`.
 
 Each profile can define:
 

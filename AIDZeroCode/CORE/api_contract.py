@@ -66,7 +66,7 @@ def profile_to_dict(profile: AgentProfile) -> dict[str, Any]:
 
 
 def profile_from_dict(payload: dict[str, Any], *, repo_root: Path) -> AgentProfile:
-    source_raw = str(payload.get("source_path", "")).strip() or "Agents/default.json"
+    source_raw = str(payload.get("source_path", "")).strip() or "Agents/default/default.json"
     source_path = Path(source_raw)
     if not source_path.is_absolute():
         if source_path.parts and source_path.parts[0] == "Agents":

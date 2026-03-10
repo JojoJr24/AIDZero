@@ -19,6 +19,7 @@ if str(CODE_ROOT) not in sys.path:
     sys.path.insert(0, str(CODE_ROOT))
 
 from CORE.agents import AgentProfileManager
+from CORE.api_server import serve_core_api
 from CORE.models import RuntimeConfig
 from CORE.repo_layout import resolve_code_root
 from CORE.ui_runtime import build_ui_runtime
@@ -35,11 +36,11 @@ class CliArgs:
 def _parse_args() -> CliArgs:
     parser = argparse.ArgumentParser(description="AIDZero runtime launcher.")
     parser.add_argument("--request", help="Prompt to process.")
-    parser.add_argument("--agent", default=None, help="Agent profile name from Agents/*.json.")
+    parser.add_argument("--agent", default=None, help="Agent profile name from Agents/<name>/<name>.json.")
     parser.add_argument(
         "--headless",
         action="store_true",
-        help="Run one-shot using HeadlessPrompt.txt and save output in Results/.",
+        help="Run one-shot using Agents/default/HeadlessPrompt.txt and save output in Results/.",
     )
     parsed = parser.parse_args()
     return CliArgs(
@@ -131,14 +132,8 @@ def _list_provider_models(repo_root: Path, provider_name: str) -> list[str]:
     return unique
 
 
-def _read_headless_prompt(repo_root: Path) -> str:
-    prompt_file = repo_root / "HeadlessPrompt.txt"
-    if not prompt_file.is_file():
-        raise FileNotFoundError(f"Headless prompt file not found: {prompt_file}")
-    prompt = prompt_file.read_text(encoding="utf-8", errors="replace").strip()
-    if not prompt:
-        raise ValueError(f"Headless prompt file is empty: {prompt_file}")
-    return prompt
+def _read_headless_prompt(profile_manager: AgentProfileManager, *, profile_name: str) -> str:
+    return profile_manager.get_headless_prompt(profile_name)
 
 
 def _write_headless_result(repo_root: Path, response: str) -> Path:
@@ -228,9 +223,10 @@ def main() -> int:
     if config.provider not in provider_names:
         print(f"error> unknown provider '{config.provider}'")
         return 2
+
     if args.headless:
         try:
-            prompt = _read_headless_prompt(repo_root)
+            prompt = _read_headless_prompt(profile_manager, profile_name=active_profile.name)
         except Exception as error:  # noqa: BLE001
             print(f"error> {error}")
             return 2
@@ -243,6 +239,36 @@ def main() -> int:
             )
         except Exception as error:  # noqa: BLE001
             print(f"error> headless execution failed: {error}")
+            return 2
+
+    try:
+        ui_type = ui_registry.ui_type(config.ui)
+    except FileNotFoundError:
+        print(f"error> unknown ui '{config.ui}'")
+        return 2
+
+    if ui_type == "thirdparty":
+        bind_host = "0.0.0.0"
+        bind_port = 8765
+        if args.request:
+            print("warning> --request is ignored for thirdparty UI mode.")
+        print("Third-party UI runtime:")
+        print(f"- ui: {config.ui}")
+        print(f"- core_api: http://{bind_host}:{bind_port}")
+        print(f"- provider: {config.provider}")
+        print(f"- model: {config.model}")
+        print(f"- agent: {active_profile.name}")
+        try:
+            return serve_core_api(
+                repo_root=repo_root,
+                provider_name=config.provider,
+                model=config.model,
+                host=bind_host,
+                port=bind_port,
+            )
+        except RuntimeError as error:
+            print(f"error> {error}")
+            print("tip> Cerrá el proceso que usa ese puerto o ejecutá aidzero-core con --port 8766.")
             return 2
 
     print("Active runtime:")

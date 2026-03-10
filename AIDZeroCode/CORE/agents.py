@@ -1,4 +1,4 @@
-"""Agent profile loading from Agents/*.json plus active profile persistence."""
+"""Agent profile loading from Agents/<name>/<name>.json plus active profile persistence."""
 
 from __future__ import annotations
 
@@ -47,13 +47,13 @@ class AgentProfileManager:
         self.state_path = self.repo_root / ".aidzero" / "agent_profile.json"
 
     def list_profile_names(self) -> list[str]:
-        names = [path.stem for path in self._iter_profile_files()]
+        names = [self._profile_name_from_path(path) for path in self._iter_profile_files()]
         return sorted(names)
 
     def get_active_name(self) -> str:
         names = self.list_profile_names()
         if not names:
-            raise RuntimeError("No profiles found in Agents/*.json")
+            raise RuntimeError("No profiles found in Agents/<name>/<name>.json")
 
         persisted = self._load_state_name()
         if persisted and persisted in names:
@@ -83,7 +83,7 @@ class AgentProfileManager:
         if not profile_name:
             raise ValueError("Profile name cannot be empty.")
 
-        path = self.profiles_root / f"{profile_name}.json"
+        path = self._profile_path_for_name(profile_name)
         if not path.is_file():
             available = ", ".join(self.list_profile_names()) or "(none)"
             raise FileNotFoundError(f"Agent profile '{profile_name}' not found. Available: {available}")
@@ -144,6 +144,16 @@ class AgentProfileManager:
             runtime_model=runtime_model,
             source_path=path,
         )
+
+    def get_headless_prompt(self, name: str) -> str:
+        profile = self.get_profile(name)
+        prompt_path = profile.source_path.parent / "HeadlessPrompt.txt"
+        if not prompt_path.is_file():
+            raise FileNotFoundError(f"Headless prompt file not found: {prompt_path}")
+        prompt = prompt_path.read_text(encoding="utf-8", errors="replace").strip()
+        if not prompt:
+            raise ValueError(f"Headless prompt file is empty: {prompt_path}")
+        return prompt
 
     def _resolve_system_prompt(self, payload: dict[str, Any], *, source_path: Path) -> str:
         inline = payload.get("system_prompt")
@@ -219,10 +229,34 @@ class AgentProfileManager:
     def _iter_profile_files(self) -> list[Path]:
         if not self.profiles_root.is_dir():
             return []
-        return sorted(
-            [path for path in self.profiles_root.glob("*.json") if path.is_file()],
-            key=lambda item: item.name.lower(),
-        )
+        files: list[Path] = []
+
+        for entry in sorted(self.profiles_root.iterdir(), key=lambda item: item.name.lower()):
+            if not entry.is_dir():
+                continue
+            candidate = entry / f"{entry.name}.json"
+            if candidate.is_file():
+                files.append(candidate)
+
+        # Backward compatibility for old flat layout: Agents/<name>.json
+        for legacy in sorted(self.profiles_root.glob("*.json"), key=lambda item: item.name.lower()):
+            legacy_name = legacy.stem
+            if any(path.parent.name == legacy_name for path in files):
+                continue
+            files.append(legacy)
+        return files
+
+    def _profile_path_for_name(self, profile_name: str) -> Path:
+        nested = self.profiles_root / profile_name / f"{profile_name}.json"
+        if nested.is_file():
+            return nested
+        # Backward compatibility for old flat layout: Agents/<name>.json
+        return self.profiles_root / f"{profile_name}.json"
+
+    def _profile_name_from_path(self, path: Path) -> str:
+        if path.parent != self.profiles_root:
+            return path.parent.name
+        return path.stem
 
     def _resolve_agents_path(self, raw_path: str, *, source_path: Path) -> Path:
         base = source_path.parent

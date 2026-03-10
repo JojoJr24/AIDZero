@@ -206,7 +206,7 @@ class AgentEngine:
         self,
         event: TriggerEvent,
         *,
-        max_rounds: int = 6,
+        max_rounds: int = 30,
         on_stream: Callable[[str], None] | None = None,
         on_artifact: Callable[[dict[str, Any]], None] | None = None,
     ) -> TurnResult:
@@ -214,6 +214,9 @@ class AgentEngine:
         used_tools: list[str] = []
         base_messages = self._build_initial_messages(event)
         messages = [dict(item) for item in base_messages]
+        turn_session_messages: list[dict[str, str]] = []
+        if user_prompt_text:
+            turn_session_messages.append({"role": "user", "content": user_prompt_text})
         response_fragments: list[str] = []
         last_tool_signature: str | None = None
         repeated_same_tool_call = 0
@@ -258,6 +261,11 @@ class AgentEngine:
                     visible = self._strip_think_blocks(assistant_text).strip()
                     if visible:
                         response_fragments.append(visible)
+                    assistant_text_stripped = assistant_text.strip()
+                    if assistant_text_stripped:
+                        turn_session_messages.append(
+                            {"role": "assistant", "content": assistant_text_stripped}
+                        )
                     break
 
                 tool_signature = self._tool_call_signature(tool_call)
@@ -310,6 +318,21 @@ class AgentEngine:
                         ),
                     }
                 )
+                assistant_text_stripped = assistant_text.strip()
+                if assistant_text_stripped:
+                    turn_session_messages.append(
+                        {"role": "assistant", "content": assistant_text_stripped}
+                    )
+                turn_session_messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "Tool response (JSON):\n"
+                            + tool_result_json
+                            + "\nContinue with your final user-facing answer."
+                        ),
+                    }
+                )
 
             if rounds >= max_rounds and not response_fragments:
                 response_fragments.append(
@@ -327,12 +350,11 @@ class AgentEngine:
                 used_tools=used_tools,
             )
             self._persist_turn(turn_result)
-            self._append_session_turn(user_prompt=event.prompt, assistant_response=turn_result.response)
+            self._append_session_messages(turn_session_messages)
             return turn_result
         except Exception:
-            # Preserve the user turn in active session even when provider/tooling fails mid-turn.
-            if user_prompt_text:
-                self._session_messages.append({"role": "user", "content": user_prompt_text})
+            # Preserve turn context in active session even when provider/tooling fails mid-turn.
+            self._append_session_messages(turn_session_messages)
             raise
 
     def _complete_assistant(
@@ -487,13 +509,13 @@ class AgentEngine:
             for item in self._session_messages
         ]
 
-    def _append_session_turn(self, *, user_prompt: str, assistant_response: str) -> None:
-        user_text = user_prompt.strip()
-        assistant_text = assistant_response.strip()
-        if user_text:
-            self._session_messages.append({"role": "user", "content": user_text})
-        if assistant_text:
-            self._session_messages.append({"role": "assistant", "content": assistant_text})
+    def _append_session_messages(self, items: list[dict[str, str]]) -> None:
+        for item in items:
+            role = str(item.get("role", "")).strip().lower()
+            content = str(item.get("content", "")).strip()
+            if role not in {"user", "assistant"} or not content:
+                continue
+            self._session_messages.append({"role": role, "content": content})
 
     def _build_system_message(self) -> str:
         base_prompt = self._load_system_prompt()
@@ -535,11 +557,15 @@ class AgentEngine:
         if self.system_prompt_override:
             return self.system_prompt_override
 
-        custom_prompt_path = resolve_agents_root(self.repo_root) / "system_prompt.md"
-        if custom_prompt_path.is_file():
-            text = custom_prompt_path.read_text(encoding="utf-8", errors="replace").strip()
-            if text:
-                return text
+        prompts = [
+            resolve_agents_root(self.repo_root) / "default" / "system_prompt.md",
+            resolve_agents_root(self.repo_root) / "system_prompt.md",
+        ]
+        for custom_prompt_path in prompts:
+            if custom_prompt_path.is_file():
+                text = custom_prompt_path.read_text(encoding="utf-8", errors="replace").strip()
+                if text:
+                    return text
 
         return (
             "You are the AIDZero runtime core.\n"

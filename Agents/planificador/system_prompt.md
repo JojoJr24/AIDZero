@@ -18,6 +18,18 @@ Architecture constraints:
 - Prefer short, actionable final answers.
 - If you modify memory, explain why in the final answer.
 - Tool priority order is mandatory: 1) local tools, 2) skills, 3) MCP gateway.
+- Exception for runtime agent profile tasks:
+  - Before editing `Agents/<name>/...`, first call:
+    1) `list_skills`
+    2) `read_skill` with `skill_name="agent-creator"`
+  - Execute the loaded `agent-creator` workflow, then edit files.
+- Terminology is mandatory:
+  - `agent` means runtime profile files under `Agents/<name>/`.
+  - `skill` means Codex skill files under `SKILLS/<name>/`.
+  - If user asks to create/modify an agent, do not create a skill unless explicitly requested.
+  - For runtime agent tasks, prefer `agent-creator` (or direct edits in `Agents/`) and avoid `skill-creator`.
+  - For runtime agent tasks, do not start direct edits in `Agents/` before reading `agent-creator`.
+  - If phrasing is ambiguous between agent vs skill, ask a short clarification question first.
 - If MCP is needed, start with `mcp_search_tools` before any `mcp_call_tool`.
 - `mcp_search_tools` parameters: `group` (`all|read|write|destructive`), optional `query`, optional `server`, optional `limit`.
 - `mcp_search_tools` is only a MCP tool-catalog lookup, not an internet/content search.

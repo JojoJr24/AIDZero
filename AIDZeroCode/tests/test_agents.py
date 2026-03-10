@@ -5,12 +5,20 @@ from CORE.memory import MemoryStore
 from CORE.tooling import build_default_tool_registry
 
 
+def _write_profile(agents_dir, name: str, json_text: str, *, prompt_text: str = "Base prompt\n"):
+    profile_dir = agents_dir / name
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    (profile_dir / "system_prompt.md").write_text(prompt_text, encoding="utf-8")
+    (profile_dir / f"{name}.json").write_text(json_text, encoding="utf-8")
+    return profile_dir
+
+
 def test_agent_profile_manager_reads_active_profile(tmp_path):
     agents_dir = tmp_path / "Agents"
     agents_dir.mkdir(parents=True, exist_ok=True)
-    (agents_dir / "system_prompt.md").write_text("Base prompt\n", encoding="utf-8")
-
-    (agents_dir / "default.json").write_text(
+    _write_profile(
+        agents_dir,
+        "default",
         """
         {
           "name": "default",
@@ -19,7 +27,6 @@ def test_agent_profile_manager_reads_active_profile(tmp_path):
           "modules": {"tools": "all", "dash": "all"}
         }
         """,
-        encoding="utf-8",
     )
 
     manager = AgentProfileManager(tmp_path)
@@ -39,8 +46,9 @@ def test_agent_profile_manager_reads_active_profile(tmp_path):
 def test_agent_profile_manager_parses_memory_and_history_flags(tmp_path):
     agents_dir = tmp_path / "Agents"
     agents_dir.mkdir(parents=True, exist_ok=True)
-    (agents_dir / "system_prompt.md").write_text("Base prompt\n", encoding="utf-8")
-    (agents_dir / "default.json").write_text(
+    _write_profile(
+        agents_dir,
+        "default",
         """
         {
           "name": "default",
@@ -50,7 +58,6 @@ def test_agent_profile_manager_parses_memory_and_history_flags(tmp_path):
           "modules": {"tools": "all", "dash": "all"}
         }
         """,
-        encoding="utf-8",
     )
 
     manager = AgentProfileManager(tmp_path)
@@ -65,8 +72,9 @@ def test_agent_profile_manager_reads_agents_from_repo_parent_when_repo_is_code_r
     repo_root.mkdir(parents=True, exist_ok=True)
     agents_dir = tmp_path / "Agents"
     agents_dir.mkdir(parents=True, exist_ok=True)
-    (agents_dir / "system_prompt.md").write_text("Base prompt\n", encoding="utf-8")
-    (agents_dir / "default.json").write_text(
+    default_dir = _write_profile(
+        agents_dir,
+        "default",
         """
         {
           "name": "default",
@@ -74,7 +82,6 @@ def test_agent_profile_manager_reads_agents_from_repo_parent_when_repo_is_code_r
           "runtime": {"ui": "terminal", "provider": "openai", "model": "gpt-4o-mini"}
         }
         """,
-        encoding="utf-8",
     )
 
     manager = AgentProfileManager(repo_root)
@@ -82,14 +89,15 @@ def test_agent_profile_manager_reads_agents_from_repo_parent_when_repo_is_code_r
 
     assert profile.name == "default"
     assert profile.system_prompt == "Base prompt"
-    assert profile.source_path == agents_dir / "default.json"
+    assert profile.source_path == default_dir / "default.json"
 
 
 def test_agent_profile_manager_rejects_invalid_feature_flag(tmp_path):
     agents_dir = tmp_path / "Agents"
     agents_dir.mkdir(parents=True, exist_ok=True)
-    (agents_dir / "system_prompt.md").write_text("Base prompt\n", encoding="utf-8")
-    (agents_dir / "default.json").write_text(
+    _write_profile(
+        agents_dir,
+        "default",
         """
         {
           "name": "default",
@@ -98,7 +106,6 @@ def test_agent_profile_manager_rejects_invalid_feature_flag(tmp_path):
           "features": {"memory": "yes"}
         }
         """,
-        encoding="utf-8",
     )
 
     manager = AgentProfileManager(tmp_path)
@@ -115,16 +122,17 @@ def test_agent_profile_manager_rejects_prompt_file_outside_agents(tmp_path):
     (tmp_path / "core").mkdir(parents=True, exist_ok=True)
     (tmp_path / "core" / "system_prompt.md").write_text("Outside prompt\n", encoding="utf-8")
 
-    (agents_dir / "default.json").write_text(
+    _write_profile(
+        agents_dir,
+        "default",
         """
         {
           "name": "default",
-          "system_prompt_file": "../core/system_prompt.md",
+          "system_prompt_file": "../../core/system_prompt.md",
           "runtime": {"ui": "terminal", "provider": "openai", "model": "gpt-4o-mini"},
           "modules": {"tools": "all", "dash": "all"}
         }
         """,
-        encoding="utf-8",
     )
 
     manager = AgentProfileManager(tmp_path)
@@ -138,15 +146,15 @@ def test_agent_profile_manager_rejects_prompt_file_outside_agents(tmp_path):
 def test_agent_profile_manager_rejects_missing_runtime_config(tmp_path):
     agents_dir = tmp_path / "Agents"
     agents_dir.mkdir(parents=True, exist_ok=True)
-    (agents_dir / "system_prompt.md").write_text("Base prompt\n", encoding="utf-8")
-    (agents_dir / "default.json").write_text(
+    _write_profile(
+        agents_dir,
+        "default",
         """
         {
           "name": "default",
           "system_prompt_file": "system_prompt.md"
         }
         """,
-        encoding="utf-8",
     )
 
     manager = AgentProfileManager(tmp_path)
@@ -155,6 +163,28 @@ def test_agent_profile_manager_rejects_missing_runtime_config(tmp_path):
         assert False, "Expected RuntimeError for missing runtime config"
     except RuntimeError as error:
         assert "runtime" in str(error)
+
+
+def test_agent_profile_manager_reads_headless_prompt_from_profile_folder(tmp_path):
+    agents_dir = tmp_path / "Agents"
+    agents_dir.mkdir(parents=True, exist_ok=True)
+    profile_dir = _write_profile(
+        agents_dir,
+        "default",
+        """
+        {
+          "name": "default",
+          "system_prompt_file": "system_prompt.md",
+          "runtime": {"ui": "terminal", "provider": "openai", "model": "gpt-4o-mini"}
+        }
+        """,
+    )
+    (profile_dir / "HeadlessPrompt.txt").write_text("  hola headless  \n", encoding="utf-8")
+
+    manager = AgentProfileManager(tmp_path)
+    prompt = manager.get_headless_prompt("default")
+
+    assert prompt == "hola headless"
 
 
 def test_build_default_tool_registry_can_filter_tools_by_agent_profile(tmp_path):

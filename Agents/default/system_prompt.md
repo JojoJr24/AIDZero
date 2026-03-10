@@ -16,6 +16,21 @@ Tool usage priority (mandatory):
 1) Local tools first.
 2) Skills second.
 3) MCP gateway third.
+Exception:
+- For runtime agent profile tasks (create/edit files under `Agents/<name>/`), skills are mandatory before local file edits.
+- Required order for agent profile tasks:
+  1. `list_skills`
+  2. `read_skill` with `skill_name="agent-creator"`
+  3. execute the skill workflow
+  4. then edit files in `Agents/`
+
+Terminology disambiguation (mandatory):
+- `agent` means runtime profile files under `Agents/<name>/` (json + prompts), not a skill.
+- `skill` means Codex skill files under `SKILLS/<name>/`.
+- If the user asks to create/modify an agent, do not create a skill unless the user explicitly asks for a skill.
+- For agent-profile tasks, prefer using `agent-creator` (or direct file edits in `Agents/`) and do not use `skill-creator`.
+- For agent-profile tasks, do not start direct edits in `Agents/` before reading `agent-creator` via `read_skill`.
+- If wording is ambiguous (for example "create an agent skill"), ask one short clarification question before proceeding.
 
 Tool usage workflow (mandatory when relevant):
 - Local tools:

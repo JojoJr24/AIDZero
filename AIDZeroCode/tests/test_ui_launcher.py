@@ -34,6 +34,19 @@ class _DummyRegistry:
         del args, kwargs
         raise CoreAPIError("Core API request failed: <urlopen error [Errno 111] Connection refused>")
 
+    def ui_type(self, ui_name):
+        del ui_name
+        return "embedded"
+
+
+class _ThirdPartyRegistry(_DummyRegistry):
+    def names(self):
+        return ["AndroidApp"]
+
+    def ui_type(self, ui_name):
+        del ui_name
+        return "thirdparty"
+
 
 def test_ui_launcher_handles_core_unavailable_without_traceback(monkeypatch, capsys, tmp_path):
     monkeypatch.setattr(ui_launcher, "AgentProfileManager", _DummyProfileManager)
@@ -54,3 +67,24 @@ def test_ui_launcher_handles_core_unavailable_without_traceback(monkeypatch, cap
     out = capsys.readouterr().out
     assert exit_code == 2
     assert "error> cannot reach core API at http://127.0.0.1:8765" in out
+
+
+def test_ui_launcher_rejects_thirdparty_ui(monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(ui_launcher, "AgentProfileManager", _DummyProfileManager)
+    monkeypatch.setattr(ui_launcher, "UIRegistry", _ThirdPartyRegistry)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "aidzero-ui",
+            "--repo-root",
+            str(tmp_path),
+            "--ui",
+            "AndroidApp",
+        ],
+    )
+
+    exit_code = ui_launcher.main()
+
+    out = capsys.readouterr().out
+    assert exit_code == 2
+    assert "error> ui 'AndroidApp' is thirdparty and has no local launcher." in out

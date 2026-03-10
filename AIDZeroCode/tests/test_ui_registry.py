@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import json
+
+import pytest
+
 from CORE.ui_registry import UIRegistry
 
 
@@ -52,3 +56,22 @@ def test_ui_registry_discovers_from_nested_code_root(tmp_path):
 
     registry = UIRegistry(tmp_path)
     assert registry.names() == ["terminal"]
+
+
+def test_ui_registry_discovers_thirdparty_ui_without_entrypoint(tmp_path):
+    ui_root = tmp_path / "UI"
+    ui_root.mkdir(parents=True, exist_ok=True)
+
+    android_dir = ui_root / "AndroidApp"
+    android_dir.mkdir(parents=True, exist_ok=True)
+    (android_dir / "ui.json").write_text(
+        json.dumps({"type": "thirdparty"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    registry = UIRegistry(tmp_path)
+
+    assert registry.names() == ["AndroidApp"]
+    assert registry.ui_type("AndroidApp") == "thirdparty"
+    with pytest.raises(RuntimeError, match="thirdparty"):
+        registry.run("AndroidApp")

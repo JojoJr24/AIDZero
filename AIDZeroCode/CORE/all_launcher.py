@@ -13,6 +13,7 @@ from urllib.error import URLError
 from urllib.request import urlopen
 
 from CORE.agents import AgentProfileManager
+from CORE.api_server import serve_core_api
 from CORE.ui_registry import UIRegistry
 
 
@@ -35,7 +36,7 @@ def _parse_args() -> Any:
     parser.add_argument("--host", default="0.0.0.0", help="Core bind host/IP")
     parser.add_argument("--port", type=int, default=8765, help="Core bind port")
     parser.add_argument("--request", help="Optional one-shot prompt")
-    parser.add_argument("--agent", default=None, help="Agent profile name from Agents/*.json")
+    parser.add_argument("--agent", default=None, help="Agent profile name from Agents/<name>/<name>.json")
     parser.add_argument(
         "--startup-timeout",
         type=float,
@@ -100,6 +101,7 @@ def main() -> int:
     if ui_name not in ui_registry.names():
         print(f"error> unknown ui '{ui_name}'")
         return 2
+    ui_type = ui_registry.ui_type(ui_name)
 
     try:
         ui_options = _parse_ui_options(list(args.ui_option), trigger="interactive")
@@ -129,6 +131,23 @@ def main() -> int:
     print("Starting split runtime:")
     print(f"- core: {bind_host}:{bind_port} ({provider_name} / {model})")
     print(f"- ui: {ui_name}")
+
+    if ui_type == "thirdparty":
+        if args.request:
+            print("warning> --request is ignored for thirdparty UI mode.")
+        print("info> thirdparty UI selected; running only core API for LAN clients.")
+        try:
+            return serve_core_api(
+                repo_root=repo_root,
+                provider_name=provider_name,
+                model=model,
+                host=bind_host,
+                port=bind_port,
+            )
+        except RuntimeError as error:
+            print(f"error> {error}")
+            print("tip> Cerrá el proceso que usa ese puerto o ejecutá con --port 8766 (u otro libre).")
+            return 2
 
     core_proc = subprocess.Popen(cmd)
     try:

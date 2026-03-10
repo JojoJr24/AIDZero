@@ -18,7 +18,7 @@ def test_profile_contract_roundtrip_includes_runtime_fields(tmp_path):
         runtime_ui="tui",
         runtime_provider="openai",
         runtime_model="gpt-4o-mini",
-        source_path=tmp_path / "Agents" / "default.json",
+        source_path=tmp_path / "Agents" / "default" / "default.json",
     )
 
     payload = profile_to_dict(profile)
@@ -34,6 +34,6 @@ def test_profile_from_dict_resolves_agents_relative_path_from_repo_parent(tmp_pa
     repo_root = tmp_path / "AIDZeroCode"
     repo_root.mkdir(parents=True, exist_ok=True)
 
-    rebuilt = profile_from_dict({"source_path": "Agents/default.json"}, repo_root=repo_root)
+    rebuilt = profile_from_dict({"source_path": "Agents/default/default.json"}, repo_root=repo_root)
 
-    assert rebuilt.source_path == (tmp_path / "Agents" / "default.json").resolve()
+    assert rebuilt.source_path == (tmp_path / "Agents" / "default" / "default.json").resolve()

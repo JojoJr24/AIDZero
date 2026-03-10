@@ -15,7 +15,7 @@ class _FakeClient:
         self.stream_calls = 0
         self.reset_calls = 0
 
-    def run_event(self, event: TriggerEvent, *, max_rounds: int = 6) -> TurnResult:
+    def run_event(self, event: TriggerEvent, *, max_rounds: int = 30) -> TurnResult:
         del event, max_rounds
         self.simple_calls += 1
         return TurnResult(
@@ -29,7 +29,7 @@ class _FakeClient:
         self,
         event: TriggerEvent,
         *,
-        max_rounds: int = 6,
+        max_rounds: int = 30,
         on_stream=None,
         on_artifact=None,
     ) -> TurnResult:

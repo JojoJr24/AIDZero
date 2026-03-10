@@ -47,7 +47,7 @@ class CoreAPIClient:
                 out.append(trigger_event_from_dict(row))
         return out
 
-    def run_event(self, event: TriggerEvent, *, max_rounds: int = 6) -> TurnResult:
+    def run_event(self, event: TriggerEvent, *, max_rounds: int = 30) -> TurnResult:
         data = self._request(
             "POST",
             "/engine/run_event",
@@ -71,7 +71,7 @@ class CoreAPIClient:
         self,
         event: TriggerEvent,
         *,
-        max_rounds: int = 6,
+        max_rounds: int = 30,
     ) -> tuple[TurnResult, list[dict[str, Any]]]:
         data = self._request(
             "POST",
@@ -103,7 +103,7 @@ class CoreAPIClient:
         self,
         event: TriggerEvent,
         *,
-        max_rounds: int = 6,
+        max_rounds: int = 30,
         on_stream=None,
         on_artifact=None,
     ) -> TurnResult:
@@ -325,7 +325,7 @@ class RemoteAgentEngine:
         self,
         event: TriggerEvent,
         *,
-        max_rounds: int = 6,
+        max_rounds: int = 30,
         on_stream=None,
         on_artifact=None,
     ) -> TurnResult:
